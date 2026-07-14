@@ -2,24 +2,41 @@ mod agent;
 mod api;
 mod cli;
 mod config;
+mod diagnostics;
 mod tools;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, error::ErrorKind};
 use cli::{Cli, Command};
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    ffi::{OsStr, OsString},
+    io::Write as _,
+    path::PathBuf,
+    process::ExitCode,
+};
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    diagnostics::init(capture_diagnostics_requested_from(std::env::args_os()));
     let task = run();
     tokio::pin!(task);
-    tokio::select! {
+    let exit_code = tokio::select! {
         result = &mut task => match result {
-            Ok(outcome) => { if let Some(report) = outcome.report { print!("{report}"); } ExitCode::from(outcome.exit_code) },
-            Err(e) => { eprintln!("Error: {e:#}"); ExitCode::from(1) }
+            Ok(outcome) => { if let Some(report) = outcome.report { print!("{report}"); } outcome.exit_code },
+            Err(e) => { diagnostics::log(format_args!("Error: {e:#}")); 1 }
         },
-        _ = tokio::signal::ctrl_c() => ExitCode::from(130),
-    }
+        _ = tokio::signal::ctrl_c() => { diagnostics::log(format_args!("Interrupted")); 130 },
+    };
+    let _ = std::io::stdout().flush();
+    diagnostics::finish(exit_code);
+    ExitCode::from(exit_code)
+}
+
+fn capture_diagnostics_requested_from(args: impl IntoIterator<Item = OsString>) -> bool {
+    args.into_iter()
+        .skip(1)
+        .take_while(|arg| arg.as_os_str() != OsStr::new("--"))
+        .any(|arg| arg.as_os_str() == OsStr::new("--capture-diagnostics"))
 }
 
 async fn run() -> Result<agent::Outcome> {
@@ -33,13 +50,14 @@ async fn run() -> Result<agent::Outcome> {
             });
         }
         Err(e) => {
-            e.print()?;
+            diagnostics::log(format_args!("{e}"));
             return Ok(agent::Outcome {
                 exit_code: 1,
                 report: None,
             });
         }
     };
+    let _ = cli.capture_diagnostics;
     match cli.command {
         Some(Command::Login) => {
             if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
@@ -53,7 +71,7 @@ async fn run() -> Result<agent::Outcome> {
                 .verify()
                 .await?;
             config::save_key(&key)?;
-            eprintln!("Login successful");
+            diagnostics::log(format_args!("Login successful"));
             Ok(agent::Outcome {
                 exit_code: 0,
                 report: None,
@@ -111,6 +129,22 @@ fn load_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn capture_flag_scan_stops_at_argument_delimiter() {
+        assert!(capture_diagnostics_requested_from([
+            OsString::from("deepseek"),
+            OsString::from("--capture-diagnostics"),
+            OsString::from("task"),
+        ]));
+        assert!(!capture_diagnostics_requested_from([
+            OsString::from("deepseek"),
+            OsString::from("--"),
+            OsString::from("--capture-diagnostics"),
+        ]));
+    }
+
     #[test]
     fn prompt_file_deleted_after_read() {
         let d = tempfile::tempdir().unwrap();

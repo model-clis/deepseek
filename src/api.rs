@@ -145,7 +145,7 @@ impl Client {
                     if !retryable_status(status) || attempt == 3 {
                         return Err(ApiError::Http(status, text).into());
                     }
-                    eprintln!("API retry {}/3", attempt + 1);
+                    crate::diagnostics::log(format_args!("API retry {}/3", attempt + 1));
                     tokio::time::sleep(Duration::from_secs(retry_after.unwrap_or(1 << attempt)))
                         .await;
                 }
@@ -153,7 +153,7 @@ impl Client {
                     if attempt == 3 {
                         return Err(ApiError::Transport(e.to_string()).into());
                     }
-                    eprintln!("Network retry {}/3", attempt + 1);
+                    crate::diagnostics::log(format_args!("Network retry {}/3", attempt + 1));
                     tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
                 }
             }

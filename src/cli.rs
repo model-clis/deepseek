@@ -19,6 +19,9 @@ pub struct Cli {
     pub prompt_file: Option<PathBuf>,
     #[arg(long, requires = "prompt_file")]
     pub delete_prompt_file: bool,
+    /// Capture diagnostics in a temporary file and print its path on error.
+    #[arg(long)]
+    pub capture_diagnostics: bool,
     #[arg(long, default_value_t=128, value_parser=clap::value_parser!(u32).range(1..))]
     pub max_turns: u32,
 }

@@ -81,7 +81,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
     let mut fragments = String::new();
 
     for work_call in 1..=max_turns {
-        eprintln!("Work call {work_call}/{max_turns}");
+        crate::diagnostics::log(format_args!("Work call {work_call}/{max_turns}"));
         let sent_len = history.len();
         let response = match client.chat(&history, &defs).await {
             Ok(response) => response,
@@ -106,7 +106,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
             fragments.clear();
             history.push(choice.message);
             for call in calls {
-                eprintln!("Tool started: {}", call.function.name);
+                crate::diagnostics::log(format_args!("Tool started: {}", call.function.name));
                 let result = tools::execute(
                     &call.function.name,
                     &call.function.arguments,
@@ -114,7 +114,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
                     &shell_info,
                 )
                 .await;
-                eprintln!("Tool finished: {}", call.function.name);
+                crate::diagnostics::log(format_args!("Tool finished: {}", call.function.name));
                 history.push(Message {
                     role: "tool".into(),
                     content: Some(result),

@@ -113,6 +113,18 @@ Check the version and invoke in one shell-tool call to reduce orchestration over
 
 Do not preflight the API key separately: invoke first. If authentication fails, ask the user to run `deepseek login` in their own terminal. Never ask them to paste an API key into the conversation.
 
+## Parameters
+
+| Parameter | Purpose |
+|---|---|
+| `[PROMPT]` | Pass the prompt positionally. Mutually exclusive with `--prompt-file`. |
+| `--prompt-file <PATH>` | Read the prompt from a UTF-8 file. |
+| `--delete-prompt-file` | Delete the prompt file after reading it. Requires `--prompt-file`. |
+| `--capture-diagnostics` | Capture CLI diagnostics in a secure temporary file and print its path on error. |
+| `--max-turns <N>` | Limit work-phase model calls to an integer of at least 1. Defaults to `128`. |
+| `-h`, `--help` | Print CLI help. |
+| `-V`, `--version` | Print the CLI version. |
+
 ## Invoke
 
 Check availability and version only before the first DeepSeek invocation in the current caller task or session. Once that check succeeds, remember the result and invoke `deepseek` directly for every later call; do not repeatedly run `command -v deepseek`, `Get-Command deepseek`, or `deepseek --version`.
@@ -120,24 +132,23 @@ Check availability and version only before the first DeepSeek invocation in the 
 The first short prompt may be positional and combine the one-time check with invocation:
 
 ```sh
-command -v deepseek >/dev/null 2>&1 && deepseek --version && deepseek 'fully self-contained prompt' --max-turns 128
+command -v deepseek >/dev/null 2>&1 && deepseek --version && deepseek --capture-diagnostics 'fully self-contained prompt'
 ```
 
 Normally write a randomly named UTF-8 prompt under the OS temporary directory, pass its absolute path, and delete it through the CLI. After the first successful check, later calls should be direct:
 
 ```sh
-deepseek --prompt-file "$prompt_file" --delete-prompt-file --max-turns 128
+deepseek --capture-diagnostics --prompt-file "$prompt_file" --delete-prompt-file
 ```
 
-PowerShell 5-compatible first-call pattern (do not use `&&`):
+PowerShell 7 first-call pattern:
 
 ```powershell
-$cmd = Get-Command deepseek -ErrorAction SilentlyContinue
-if ($cmd) { deepseek --version; if ($LASTEXITCODE -eq 0) { deepseek --prompt-file $promptFile --delete-prompt-file --max-turns 128 } }
+Get-Command deepseek -ErrorAction SilentlyContinue > $null && deepseek --version && deepseek --capture-diagnostics --prompt-file $promptFile --delete-prompt-file
 ```
 
 Subsequent PowerShell calls should likewise invoke `deepseek` directly.
 
-Retain the prompt only when auditability requires it. Never put credentials in a prompt file. Stdout is the final report; stderr normally need not be examined unless diagnosing a failure.
+Retain the prompt only when auditability requires it. Never put credentials in a prompt file. Stdout is the final report. Use `--capture-diagnostics` for routine calls. On exits other than `0` or `2`, inspect the file named by the final `DEEPSEEK_DIAGNOSTICS=<path>` stderr line. Never rerun solely to recover diagnostics.
 
 Exit codes: `0` success, `1` failure, `2` incomplete, and `130` interrupted.
