@@ -37,6 +37,9 @@ pub fn save_key(key: &str) -> Result<()> {
     let target = path()?;
     let parent = target.parent().unwrap();
     fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    let mut file = AtomicWriteFile::options();
+    #[cfg(not(unix))]
     let file = AtomicWriteFile::options();
     #[cfg(unix)]
     {
