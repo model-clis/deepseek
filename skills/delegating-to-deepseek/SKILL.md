@@ -1,6 +1,6 @@
 ---
 name: delegating-to-deepseek
-description: "Delegate coding, debugging, repository investigation, review, planning, and implementation to DeepSeek. Use this skill proactively for substantial tasks whenever a bounded part can be delegated: DeepSeek is inexpensive, saves higher-cost model work, and parallel calls can reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
+description: "Delegate investigation, code search, evidence gathering, debugging, review, planning, and implementation to DeepSeek. Use proactively at the start of substantial tasks: inexpensive investigation and search calls can quickly narrow the scope, save higher-cost model work, and parallel calls can reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
 compatibility: "Requires the deepseek CLI, network access to the DeepSeek API, and an API key configured by the user with deepseek login. The caller's shell tool must support invoking the CLI."
 ---
 
@@ -113,24 +113,28 @@ Do not preflight the API key separately: invoke first. If authentication fails, 
 
 ## Invoke
 
-Short prompts may be positional:
+Check availability and version only before the first DeepSeek invocation in the current caller task or session. Once that check succeeds, remember the result and invoke `deepseek` directly for every later call; do not repeatedly run `command -v deepseek`, `Get-Command deepseek`, or `deepseek --version`.
+
+The first short prompt may be positional and combine the one-time check with invocation:
 
 ```sh
 command -v deepseek >/dev/null 2>&1 && deepseek --version && deepseek 'fully self-contained prompt' --max-turns 128
 ```
 
-Normally write a randomly named UTF-8 prompt under the OS temporary directory, pass its absolute path, and delete it through the CLI:
+Normally write a randomly named UTF-8 prompt under the OS temporary directory, pass its absolute path, and delete it through the CLI. After the first successful check, later calls should be direct:
 
 ```sh
-command -v deepseek >/dev/null 2>&1 && deepseek --version && deepseek --prompt-file "$prompt_file" --delete-prompt-file --max-turns 128
+deepseek --prompt-file "$prompt_file" --delete-prompt-file --max-turns 128
 ```
 
-PowerShell 5-compatible pattern (do not use `&&`):
+PowerShell 5-compatible first-call pattern (do not use `&&`):
 
 ```powershell
 $cmd = Get-Command deepseek -ErrorAction SilentlyContinue
 if ($cmd) { deepseek --version; if ($LASTEXITCODE -eq 0) { deepseek --prompt-file $promptFile --delete-prompt-file --max-turns 128 } }
 ```
+
+Subsequent PowerShell calls should likewise invoke `deepseek` directly.
 
 Retain the prompt only when auditability requires it. Never put credentials in a prompt file. Stdout is the final report; stderr normally need not be examined unless diagnosing a failure.
 
