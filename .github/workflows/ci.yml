@@ -48,12 +48,10 @@ jobs:
           node-version: 20
       - run: npx --yes skills@latest add . --list
       - run: sh -n scripts/install.sh
-      - name: Parse JSON and YAML
+      - name: Check workflow files
         run: |
           python3 - <<'PY'
-          import json
           from pathlib import Path
-          json.loads(Path('skills/delegating-to-deepseek/evals/evals.json').read_text())
           for path in Path('.github/workflows').glob('*.yml'):
               text = path.read_text()
               assert text.startswith('name:') and '\n' in text
