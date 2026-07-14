@@ -7,9 +7,29 @@ use std::path::PathBuf;
 
 const CONTEXT_GUARD: u64 = 900_000;
 
+#[derive(Clone, Copy, Default)]
+pub struct UsageTotals {
+    pub total_tokens: u64,
+    pub prompt_tokens: u64,
+    pub prompt_cache_hit_tokens: u64,
+}
+
+impl UsageTotals {
+    fn add(&mut self, usage: Option<&crate::api::Usage>) {
+        if let Some(usage) = usage {
+            self.total_tokens = self.total_tokens.saturating_add(usage.total_tokens);
+            self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
+            self.prompt_cache_hit_tokens = self
+                .prompt_cache_hit_tokens
+                .saturating_add(usage.prompt_cache_hit_tokens);
+        }
+    }
+}
+
 pub struct Outcome {
     pub exit_code: u8,
     pub report: Option<String>,
+    pub usage: UsageTotals,
 }
 
 fn msg(role: &str, content: impl Into<String>) -> Message {
@@ -59,10 +79,11 @@ fn projected_tokens(usage: Option<u64>, history: &[Message], sent_len: usize) ->
     }
 }
 
-fn context_outcome(detail: &str) -> Outcome {
+fn context_outcome(detail: &str, usage: UsageTotals) -> Outcome {
     Outcome {
         exit_code: 2,
         report: Some(format!("## Incomplete\n\n{detail}")),
+        usage,
     }
 }
 
@@ -79,6 +100,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
         msg("user", prompt),
     ];
     let mut fragments = String::new();
+    let mut usage = UsageTotals::default();
 
     for work_call in 1..=max_turns {
         crate::diagnostics::log(format_args!("Work call {work_call}/{max_turns}"));
@@ -86,10 +108,14 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
         let response = match client.chat(&history, &defs).await {
             Ok(response) => response,
             Err(e) if is_context(&e) => {
-                return Ok(context_outcome("API context length exceeded during work."));
+                return Ok(context_outcome(
+                    "API context length exceeded during work.",
+                    usage,
+                ));
             }
             Err(e) => return Err(e),
         };
+        usage.add(response.usage.as_ref());
         let prompt_tokens = response.usage.as_ref().map(|u| u.prompt_tokens);
         let choice = response
             .choices
@@ -135,6 +161,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
                     return Ok(Outcome {
                         exit_code: 0,
                         report: Some(fragments),
+                        usage,
                     });
                 }
                 Some("length") => {
@@ -162,7 +189,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
             None
         };
         if let Some(why) = why {
-            return finish(client, &defs, &mut history, why, &mut fragments).await;
+            return finish(client, &defs, &mut history, why, &mut fragments, &mut usage).await;
         }
     }
 
@@ -172,6 +199,7 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
         &mut history,
         "max turns reached",
         &mut fragments,
+        &mut usage,
     )
     .await
 }
@@ -182,6 +210,7 @@ async fn finish(
     history: &mut Vec<Message>,
     why: &str,
     fragments: &mut String,
+    usage: &mut UsageTotals,
 ) -> Result<Outcome> {
     fragments.clear();
     history.push(msg("user", format!("The work phase ended ({why}). Do not use tools. Output a clear Markdown incomplete report describing what was and was not completed, without suggestions.")));
@@ -191,10 +220,12 @@ async fn finish(
             Err(e) if is_context(&e) => {
                 return Ok(context_outcome(
                     "API context length exceeded while producing the incomplete report.",
+                    *usage,
                 ));
             }
             Err(e) => return Err(e),
         };
+        usage.add(response.usage.as_ref());
         let choice = response
             .choices
             .into_iter()
@@ -238,6 +269,7 @@ async fn finish(
                     return Ok(Outcome {
                         exit_code: 2,
                         report: Some(fragments.clone()),
+                        usage: *usage,
                     });
                 }
             }
@@ -251,6 +283,7 @@ async fn finish(
     }
     Ok(context_outcome(
         "The model did not produce a final incomplete report after three finish requests.",
+        *usage,
     ))
 }
 
@@ -293,7 +326,11 @@ mod tests {
     fn response(message: Value, finish_reason: &str, prompt_tokens: u64) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
             "choices": [{"message": message, "finish_reason": finish_reason}],
-            "usage": {"prompt_tokens": prompt_tokens}
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "prompt_cache_hit_tokens": prompt_tokens / 2,
+                "total_tokens": prompt_tokens + 10
+            }
         }))
     }
 
@@ -400,6 +437,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.usage.total_tokens, 320);
+        assert_eq!(outcome.usage.prompt_tokens, 300);
+        assert_eq!(outcome.usage.prompt_cache_hit_tokens, 150);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("ordered.txt")).unwrap(),
             "ready"

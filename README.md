@@ -53,7 +53,7 @@ deepseek --prompt-file /absolute/path/prompt.txt --delete-prompt-file --max-turn
 deepseek --capture-diagnostics --prompt-file /absolute/path/prompt.txt --delete-prompt-file
 ```
 
-The CLI is stateless and has no consultation/execution mode. Prompts must be self-contained. Stdout contains the final report; stderr is diagnostic. Exit codes are `0` normal, `1` failure, `2` valid but incomplete, and `130` interrupted; callers must interpret results and inspect the workspace rather than automate solely from a code.
+The CLI is stateless and has no consultation/execution mode. Prompts must be self-contained. During agent runs, stdout emits progress dots followed by a usage summary, `---`, and the final report; stderr is diagnostic. Exit codes are `0` normal, `1` failure, `2` valid but incomplete, and `130` interrupted; callers must interpret results and inspect the workspace rather than automate solely from a code.
 
 `--capture-diagnostics` writes CLI diagnostics to a secure temporary file. Exits `0` and `2` delete the file; any other exit keeps it and prints `DEEPSEEK_DIAGNOSTICS=<path>` as the final stderr line.
 

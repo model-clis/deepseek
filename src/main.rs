@@ -13,6 +13,7 @@ use std::{
     io::Write as _,
     path::PathBuf,
     process::ExitCode,
+    time::Duration,
 };
 
 #[tokio::main]
@@ -47,6 +48,7 @@ async fn run() -> Result<agent::Outcome> {
             return Ok(agent::Outcome {
                 exit_code: 0,
                 report: None,
+                usage: agent::UsageTotals::default(),
             });
         }
         Err(e) => {
@@ -54,6 +56,7 @@ async fn run() -> Result<agent::Outcome> {
             return Ok(agent::Outcome {
                 exit_code: 1,
                 report: None,
+                usage: agent::UsageTotals::default(),
             });
         }
     };
@@ -75,6 +78,7 @@ async fn run() -> Result<agent::Outcome> {
             Ok(agent::Outcome {
                 exit_code: 0,
                 report: None,
+                usage: agent::UsageTotals::default(),
             })
         }
         Some(Command::Logout) => {
@@ -82,6 +86,7 @@ async fn run() -> Result<agent::Outcome> {
             Ok(agent::Outcome {
                 exit_code: 0,
                 report: None,
+                usage: agent::UsageTotals::default(),
             })
         }
         None => {
@@ -89,8 +94,95 @@ async fn run() -> Result<agent::Outcome> {
             let prompt = load_prompt(cli.prompt, cli.prompt_file, cli.delete_prompt_file, &cwd)?;
             let key = config::load_key()?;
             let client = api::Client::new(key, api::DEFAULT_BASE)?;
-            agent::run(client, prompt, cwd, cli.max_turns).await
+            run_agent(client, prompt, cwd, cli.max_turns).await
         }
+    }
+}
+
+async fn run_agent(
+    client: api::Client,
+    prompt: String,
+    cwd: PathBuf,
+    max_turns: u32,
+) -> Result<agent::Outcome> {
+    let start = tokio::time::Instant::now();
+    let mut heartbeat = Heartbeat::default();
+    let mut interval =
+        tokio::time::interval_at(start + Duration::from_secs(1), Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let task = agent::run(client, prompt, cwd, max_turns);
+    tokio::pin!(task);
+
+    loop {
+        tokio::select! {
+            result = &mut task => {
+                match result {
+                    Ok(outcome) => {
+                        heartbeat.finish(start.elapsed().as_secs(), outcome.usage);
+                        return Ok(outcome);
+                    }
+                    Err(error) => {
+                        heartbeat.stop();
+                        return Err(error);
+                    }
+                }
+            }
+            _ = interval.tick() => heartbeat.tick(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Heartbeat {
+    printed: bool,
+}
+
+impl Heartbeat {
+    fn tick(&mut self) {
+        print!(".");
+        let _ = std::io::stdout().flush();
+        self.printed = true;
+    }
+
+    fn finish(&mut self, elapsed_seconds: u64, usage: agent::UsageTotals) {
+        if self.printed {
+            println!();
+        }
+        println!("{}", final_status(elapsed_seconds, usage));
+        println!("---");
+        let _ = std::io::stdout().flush();
+        self.printed = false;
+    }
+
+    fn stop(&mut self) {
+        if self.printed {
+            println!();
+            let _ = std::io::stdout().flush();
+            self.printed = false;
+        }
+    }
+}
+
+fn final_status(elapsed_seconds: u64, usage: agent::UsageTotals) -> String {
+    if usage.total_tokens == 0 {
+        format!("Elapsed: {elapsed_seconds}s")
+    } else if usage.prompt_tokens == 0 {
+        format!(
+            "Elapsed: {elapsed_seconds}s | Tokens: {}",
+            usage.total_tokens
+        )
+    } else {
+        let cache_rate = usage.prompt_cache_hit_tokens as f64 * 100.0 / usage.prompt_tokens as f64;
+        format!(
+            "Elapsed: {elapsed_seconds}s | Tokens: {} | Cache: {cache_rate:.1}%",
+            usage.total_tokens
+        )
+    }
+}
+
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -155,5 +247,34 @@ mod tests {
             "hello"
         );
         assert!(!p.exists());
+    }
+
+    #[test]
+    fn final_status_uses_actual_usage_and_hides_zero_fields() {
+        assert_eq!(
+            final_status(3, agent::UsageTotals::default()),
+            "Elapsed: 3s"
+        );
+        assert_eq!(
+            final_status(
+                8,
+                agent::UsageTotals {
+                    total_tokens: 12_430,
+                    ..Default::default()
+                }
+            ),
+            "Elapsed: 8s | Tokens: 12430"
+        );
+        assert_eq!(
+            final_status(
+                18,
+                agent::UsageTotals {
+                    total_tokens: 24_821,
+                    prompt_tokens: 20_000,
+                    prompt_cache_hit_tokens: 15_860,
+                }
+            ),
+            "Elapsed: 18s | Tokens: 24821 | Cache: 79.3%"
+        );
     }
 }

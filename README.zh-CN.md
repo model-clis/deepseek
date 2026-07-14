@@ -53,7 +53,7 @@ deepseek --prompt-file /absolute/path/prompt.txt --delete-prompt-file --max-turn
 deepseek --capture-diagnostics --prompt-file /absolute/path/prompt.txt --delete-prompt-file
 ```
 
-CLI 无状态，也没有咨询/执行模式。Prompt 必须完全自包含。stdout 是最终报告，stderr 用于诊断。退出码：`0` 正常、`1` 失败、`2` 有效但未完成、`130` 中断；调用方必须自行解释结果并检查工作区，不能只依赖退出码自动决策。
+CLI 无状态，也没有咨询/执行模式。Prompt 必须完全自包含。Agent 运行期间，stdout 会依次输出进度点、用量摘要、`---` 和最终报告；stderr 用于诊断。退出码：`0` 正常、`1` 失败、`2` 有效但未完成、`130` 中断；调用方必须自行解释结果并检查工作区，不能只依赖退出码自动决策。
 
 `--capture-diagnostics` 将 CLI 诊断写入权限受限的临时文件。退出码为 `0` 或 `2` 时删除该文件；其他退出码会保留文件，并在 stderr 最后一行输出 `DEEPSEEK_DIAGNOSTICS=<路径>`。
 

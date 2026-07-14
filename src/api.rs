@@ -62,6 +62,8 @@ pub struct Choice {
 #[derive(Debug, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u64,
+    pub prompt_cache_hit_tokens: u64,
+    pub total_tokens: u64,
 }
 
 #[derive(Serialize)]

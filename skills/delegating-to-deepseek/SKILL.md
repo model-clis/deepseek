@@ -10,9 +10,13 @@ Use the stateless `deepseek` CLI as a general-purpose subagent. Decide whether e
 
 The CLI currently pins the model ID to `deepseek-v4-flash` (DeepSeek V4 Flash).
 
+## Capability context
+
+DeepSeek starts with local file and shell tools and does not automatically inherit the web, browser, MCP, connected-service, or skill capabilities available to you. If a task would benefit from a reusable skill, include the skill's absolute path in the prompt and ask DeepSeek to read it before acting; make sure any commands or local resources required by that skill are also available. When a capability cannot be provided this way, handle that part yourself and pass the relevant results to DeepSeek as context.
+
 ## Safety gate
 
-The caller—not the CLI—must classify the task. The CLI provides no permission isolation.
+You are responsible for classifying the task; the CLI provides no permission isolation.
 
 Never delegate execution involving irreversible deletion; push, history rewriting, or tags; releases, packaging, or deployment; production or shared infrastructure; database bulk changes or migrations; credentials; permissions, security controls, or billing; external communication; or admin/root access. A read-only consultation about these areas is allowed only when the prompt explicitly requires no side effects.
 
@@ -20,26 +24,26 @@ If execution crosses this boundary, refuse delegation. Do not weaken the boundar
 
 ## Scope and decomposition
 
-Split large work into bounded, stateless calls. Read-only calls are usually safe to run concurrently. Execute calls may run concurrently only when their file scopes do not overlap. Never concurrently delegate work touching the same file, formatting, dependencies, Git, or code generation. The caller must synthesize all reports and inspect the workspace afterward.
+Split large work into bounded, stateless calls. Read-only calls are usually safe to run concurrently. Execute calls may run concurrently only when their file scopes do not overlap. Never concurrently delegate work touching the same file, formatting, dependencies, Git, or code generation. You must synthesize all reports and inspect the workspace afterward.
 
 ## Build the prompt
 
-DeepSeek is a fast, smaller model. Do not rely on it to infer missing context, recover the caller's unstated intent, or discover the desired output format. Spend enough prompt tokens to make the delegated task unambiguous; a detailed prompt is cheaper than a failed call or a second corrective call.
+DeepSeek is a fast, smaller model. Do not rely on it to infer missing context, recover your unstated intent, or discover the desired output format. Spend enough prompt tokens to make the delegated task unambiguous; a detailed prompt is cheaper than a failed call or a second corrective call.
 
 Give each call one coherent objective and include everything needed to complete it independently:
 
 - Explain the repository, subsystem, user-visible problem, and why the task matters.
 - Separate known facts from hypotheses. Include errors, relevant observations, and decisions already made.
 - Describe current behavior and desired behavior precisely. Use concrete examples when semantics could be interpreted more than one way.
-- Name important symbols, APIs, commands, conventions, and likely starting files. Do not make the model rediscover information the caller already has.
+- Name important symbols, APIs, commands, conventions, and likely starting files. Do not make the model rediscover information you already have.
 - For execution, define exact allowed paths, forbidden areas, expected edits, non-goals, and behavior that must remain unchanged.
 - For read-only work, explicitly prohibit edits, mutating commands, external communication, and changes to systems or services.
-- State required checks and realistic verification commands. Distinguish checks DeepSeek must run from checks the caller will run afterward.
+- State required checks and realistic verification commands. Distinguish checks DeepSeek must run from checks you will run afterward.
 - Define observable completion criteria item by item. Avoid vague goals such as “fix it,” “investigate thoroughly,” or “make it robust.”
 - Specify the final report headings and the evidence needed under each heading. Require an accurate account of incomplete work and failed checks.
 - Tell DeepSeek to stop and report a blocker rather than guess, broaden scope, or cross a safety boundary.
 
-For a large task, first decompose it in the caller. Send multiple focused prompts instead of one prompt containing loosely related objectives. Repeat shared context in every call because the CLI is stateless.
+For a large task, decompose it yourself before delegating. Send multiple focused prompts instead of one prompt containing loosely related objectives. Repeat shared context in every call because the CLI is stateless.
 
 Use this general structure, omitting sections that add no information:
 
@@ -127,7 +131,7 @@ Do not preflight the API key separately: invoke first. If authentication fails, 
 
 ## Invoke
 
-Check availability and version only before the first DeepSeek invocation in the current caller task or session. Once that check succeeds, remember the result and invoke `deepseek` directly for every later call; do not repeatedly run `command -v deepseek`, `Get-Command deepseek`, or `deepseek --version`.
+Check availability and version only before the first DeepSeek invocation in your current task or session. Once that check succeeds, remember the result and invoke `deepseek` directly for every later call; do not repeatedly run `command -v deepseek`, `Get-Command deepseek`, or `deepseek --version`.
 
 The first short prompt may be positional and combine the one-time check with invocation:
 
@@ -149,6 +153,6 @@ Get-Command deepseek -ErrorAction SilentlyContinue > $null && deepseek --version
 
 Subsequent PowerShell calls should likewise invoke `deepseek` directly.
 
-Retain the prompt only when auditability requires it. Never put credentials in a prompt file. Stdout is the final report. Use `--capture-diagnostics` for routine calls. On exits other than `0` or `2`, inspect the file named by the final `DEEPSEEK_DIAGNOSTICS=<path>` stderr line. Never rerun solely to recover diagnostics.
+Retain the prompt only when auditability requires it. Never put credentials in a prompt file. Stdout continuously prints dots while the CLI is running, followed by the final report. Use `--capture-diagnostics` for routine calls. On exits other than `0` or `2`, inspect the file named by the final `DEEPSEEK_DIAGNOSTICS=<path>` stderr line. Never rerun solely to recover diagnostics.
 
 Exit codes: `0` success, `1` failure, `2` incomplete, and `130` interrupted.
