@@ -1,6 +1,6 @@
 ---
 name: delegating-to-deepseek
-description: "Delegate investigation, code search, evidence gathering, debugging, review, planning, and implementation to DeepSeek. Use proactively at the start of substantial tasks: inexpensive investigation and search calls can quickly narrow the scope, save higher-cost model work, and parallel calls can reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
+description: "Delegate investigation, code search, evidence gathering, debugging, review, planning, code changes, and implementation to DeepSeek. Use whenever a task or bounded subtask can be delegated: inexpensive search can quickly narrow scope, delegated edits save higher-cost model work, and parallel calls reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
 compatibility: "Requires the deepseek CLI, network access to the DeepSeek API, and an API key configured by the user with deepseek login. The caller's shell tool must support invoking the CLI."
 ---
 
@@ -138,4 +138,4 @@ Subsequent PowerShell calls should likewise invoke `deepseek` directly.
 
 Retain the prompt only when auditability requires it. Never put credentials in a prompt file. Stdout is the final report; stderr normally need not be examined unless diagnosing a failure.
 
-Exit codes are signals for caller orchestration, not hard-coded automatic decisions: `0` normal, `1` failure, `2` valid but incomplete, and `130` interrupted. Independently evaluate the report and workspace.
+Exit codes: `0` success, `1` failure, `2` incomplete, and `130` interrupted.
