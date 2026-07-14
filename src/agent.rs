@@ -48,7 +48,7 @@ fn system(cwd: &std::path::Path, shell: &tools::ShellInfo) -> String {
     let now = chrono::Local::now();
     let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "unknown".into());
     format!(
-        "You are a general-purpose agent. Follow the user's scope, side-effect, and output-format constraints exactly; plan before acting and use only the tool calls needed. Treat tool results as authoritative: check ok, command_succeeded, exit_code, timed_out, truncated, and next_offset before claiming success or completeness. Environment: OS={} {}; arch={}; shell={}. The startup cwd is {}; relative paths resolve from it and absolute paths remain absolute. The local startup datetime is {} ({}). CLI version: {}. Tools: read reads files, write creates or replaces files, edit performs a unique replacement, and shell runs commands.",
+        "You are a general-purpose agent. Follow the user's scope, side-effect, and output-format constraints exactly; plan before acting and use only the tool calls needed. Treat tool results as authoritative: check ok, shell status, truncated, and next_offset before claiming success or completeness. Environment: OS={} {}; arch={}; shell={}. The startup cwd is {}; relative paths resolve from it and absolute paths remain absolute. The local startup datetime is {} ({}). CLI version: {}. Tools: read reads files, write creates or replaces files, edit performs a unique replacement, and shell runs commands.",
         os.os_type(),
         os.version(),
         std::env::consts::ARCH,
@@ -406,7 +406,7 @@ mod tests {
         assert!(body.get("top_p").is_none());
         let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(system.contains("Treat tool results as authoritative"));
-        assert!(system.contains("command_succeeded"));
+        assert!(system.contains("shell status"));
     }
 
     #[tokio::test]
