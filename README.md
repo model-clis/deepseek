@@ -15,7 +15,7 @@ npx skills add model-clis/deepseek
 Windows (preferred):
 
 ```powershell
-scoop bucket add model-clis https://github.com/model-clis/deepseek
+scoop bucket add model-clis https://github.com/model-clis/homebrew-packages
 scoop install model-clis/deepseek
 ```
 
@@ -25,7 +25,14 @@ Windows without Scoop:
 irm https://raw.githubusercontent.com/model-clis/deepseek/main/scripts/install.ps1 | iex
 ```
 
-Linux x64 or macOS Apple Silicon:
+Apple Silicon macOS (preferred):
+
+```sh
+brew tap model-clis/packages
+brew install deepseek
+```
+
+Linux x64 or macOS Apple Silicon without Homebrew:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/model-clis/deepseek/main/scripts/install.sh | sh
@@ -64,6 +71,8 @@ sh -n scripts/install.sh
 ## Releases
 
 The automated daily workflow publishes only when `main` has commits not present in the latest release. Versions use Hong Kong dates (`vYYYY.MDD.REV`). Stable assets are produced for Windows x64, Linux x64 (musl), and macOS Apple Silicon, each with a `.sha256` file. There are no nightly or prerelease channels.
+
+Homebrew and Scoop metadata is maintained in [`model-clis/homebrew-packages`](https://github.com/model-clis/homebrew-packages) and reconciled with the latest release daily.
 
 Repository: <https://github.com/model-clis/deepseek>
 

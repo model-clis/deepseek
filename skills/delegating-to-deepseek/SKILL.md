@@ -42,7 +42,7 @@ Check the version and invoke in one shell-tool invocation to reduce tool calls. 
 Preferred Windows installation:
 
 ```powershell
-scoop bucket add model-clis https://github.com/model-clis/deepseek
+scoop bucket add model-clis https://github.com/model-clis/homebrew-packages
 scoop install model-clis/deepseek
 ```
 
@@ -52,7 +52,14 @@ Without Scoop, use:
 irm https://raw.githubusercontent.com/model-clis/deepseek/main/scripts/install.ps1 | iex
 ```
 
-On Unix:
+On Apple Silicon macOS with Homebrew:
+
+```sh
+brew tap model-clis/packages
+brew install deepseek
+```
+
+On Linux, or macOS without Homebrew:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/model-clis/deepseek/main/scripts/install.sh | sh

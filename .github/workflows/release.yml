@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           source_sha=$(git rev-parse HEAD)
           latest=$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)
-          if [ -n "$latest" ] && [ -z "$(git rev-list "$latest..HEAD" -- . ':(exclude)bucket/deepseek.json' ':(exclude)Cargo.toml' ':(exclude)Cargo.lock')" ]; then
+          if [ -n "$latest" ] && [ -z "$(git rev-list "$latest..HEAD" -- . ':(exclude)Cargo.toml' ':(exclude)Cargo.lock')" ]; then
             echo 'release=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -133,7 +133,7 @@ jobs:
           pattern: deepseek-*
           path: dist
           merge-multiple: true
-      - name: Update manifest, commit, and tag
+      - name: Commit version and tag
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -142,19 +142,9 @@ jobs:
           set -euo pipefail
           git fetch origin main --tags
           [ "$(git rev-parse origin/main)" = "$SOURCE_SHA" ] || { echo 'main changed during release; aborting safely' >&2; exit 1; }
-          export HASH=$(awk 'NR==1 {print $1}' dist/deepseek-windows-x86_64.exe.sha256)
-          python3 - <<'PY'
-          import json, os
-          p='bucket/deepseek.json'; d=json.load(open(p))
-          d['version']=os.environ['VERSION']
-          a=d['architecture']['64bit']
-          a['url']=f"https://github.com/model-clis/deepseek/releases/download/{os.environ['TAG']}/deepseek-windows-x86_64.exe"
-          a['hash']=os.environ['HASH']
-          open(p,'w').write(json.dumps(d, indent=2)+'\n')
-          PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Cargo.toml Cargo.lock bucket/deepseek.json
+          git add Cargo.toml Cargo.lock
           git commit -m "release: $TAG"
           git tag -a "$TAG" -m "DeepSeek CLI $TAG"
           git push origin HEAD:main "$TAG"

@@ -15,7 +15,7 @@ npx skills add model-clis/deepseek
 Windows（推荐）：
 
 ```powershell
-scoop bucket add model-clis https://github.com/model-clis/deepseek
+scoop bucket add model-clis https://github.com/model-clis/homebrew-packages
 scoop install model-clis/deepseek
 ```
 
@@ -25,7 +25,14 @@ Windows 无 Scoop：
 irm https://raw.githubusercontent.com/model-clis/deepseek/main/scripts/install.ps1 | iex
 ```
 
-Linux x64 或 Apple Silicon macOS：
+Apple Silicon macOS（推荐）：
+
+```sh
+brew tap model-clis/packages
+brew install deepseek
+```
+
+Linux x64 或无 Homebrew 的 Apple Silicon macOS：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/model-clis/deepseek/main/scripts/install.sh | sh
@@ -64,6 +71,8 @@ sh -n scripts/install.sh
 ## 发布
 
 每日自动流程仅在 `main` 存在尚未包含在最新 Release 的提交时发布。版本使用香港日期（`vYYYY.MDD.REV`）。稳定资产覆盖 Windows x64、Linux x64（musl）和 Apple Silicon macOS，每个资产都有 `.sha256`。不提供 nightly 或 prerelease。
+
+Homebrew 与 Scoop 元数据由 [`model-clis/homebrew-packages`](https://github.com/model-clis/homebrew-packages) 统一维护，并每日与最新 Release 对齐。
 
 仓库：<https://github.com/model-clis/deepseek>
 
