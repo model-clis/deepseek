@@ -28,7 +28,7 @@ fn system(cwd: &std::path::Path, shell: &tools::ShellInfo) -> String {
     let now = chrono::Local::now();
     let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "unknown".into());
     format!(
-        "You are a general-purpose agent. Environment: OS={} {}; arch={}; shell={}; startup cwd={}; relative paths resolve from startup cwd and absolute paths remain absolute; local startup datetime={} ({}); CLI version={}. Tools: read reads files, write creates or replaces files, edit performs a unique replacement, and shell runs commands. read and shell output may be truncated; handle truncation and next_offset yourself.",
+        "You are a general-purpose agent. Follow the user's scope, side-effect, and output-format constraints exactly; plan before acting and use only the tool calls needed. Treat tool results as authoritative: check ok, command_succeeded, exit_code, timed_out, truncated, and next_offset before claiming success or completeness. Environment: OS={} {}; arch={}; shell={}. The startup cwd is {}; relative paths resolve from it and absolute paths remain absolute. The local startup datetime is {} ({}). CLI version: {}. Tools: read reads files, write creates or replaces files, edit performs a unique replacement, and shell runs commands.",
         os.os_type(),
         os.version(),
         std::env::consts::ARCH,
@@ -235,7 +235,10 @@ async fn finish(
                     ));
                 } else {
                     fragments.push_str(&text);
-                    return Ok(context_outcome(fragments));
+                    return Ok(Outcome {
+                        exit_code: 2,
+                        report: Some(fragments.clone()),
+                    });
                 }
             }
             Some("content_filter") => bail!("Finish response was content-filtered"),
@@ -364,6 +367,9 @@ mod tests {
         assert_eq!(body["tools"].as_array().unwrap().len(), 4);
         assert!(body.get("temperature").is_none());
         assert!(body.get("top_p").is_none());
+        let system = body["messages"][0]["content"].as_str().unwrap();
+        assert!(system.contains("Treat tool results as authoritative"));
+        assert!(system.contains("command_succeeded"));
     }
 
     #[tokio::test]
@@ -447,6 +453,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.exit_code, 2);
+        assert_eq!(outcome.report.as_deref(), Some("## Status\nIncomplete"));
         assert!(dir.path().join("work.txt").is_file());
         assert!(!dir.path().join("forbidden.txt").exists());
 

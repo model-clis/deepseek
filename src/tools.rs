@@ -87,7 +87,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         def(
             "read",
-            "Read a regular UTF-8 file (up to 2000 lines and 128 KiB)",
+            "Read a regular UTF-8 file with 1-based line offsets (up to 2000 lines and 128 KiB per call). The JSON result includes truncated and next_offset; continue from next_offset when truncated is true",
             json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"]}),
         ),
         def(
@@ -97,12 +97,12 @@ pub fn definitions() -> Vec<Value> {
         ),
         def(
             "edit",
-            "Replace one unique text occurrence",
+            "Replace one unique text occurrence. The call fails without changing the file unless old_text matches exactly once",
             json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","minLength":1},"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}),
         ),
         def(
             "shell",
-            "Run a non-interactive shell command; output may be truncated",
+            "Run a non-interactive shell command. The JSON result distinguishes tool success (ok) from command_succeeded and includes exit_code, timed_out, stdout, stderr, and truncation flags",
             json!({"type":"object","additionalProperties":false,"properties":{"command":{"type":"string","minLength":1},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600}},"required":["command"]}),
         ),
     ]
@@ -410,7 +410,7 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
     };
     let (o, ot) = captured(oc);
     let (e, et) = captured(ec);
-    json!({"ok":true,"exit_code":status.code(),"timed_out":timed_out,"duration_ms":start.elapsed().as_millis(),"stdout":String::from_utf8_lossy(&o),"stderr":String::from_utf8_lossy(&e),"stdout_truncated":ot,"stderr_truncated":et}).to_string()
+    json!({"ok":true,"command_succeeded":!timed_out && status.success(),"exit_code":status.code(),"timed_out":timed_out,"duration_ms":start.elapsed().as_millis(),"stdout":String::from_utf8_lossy(&o),"stderr":String::from_utf8_lossy(&e),"stdout_truncated":ot,"stderr_truncated":et}).to_string()
 }
 
 #[cfg(test)]
@@ -510,9 +510,11 @@ mod tests {
             "sleep 5",
         );
         let v = run("shell", &json!({"command":fail}).to_string(), d.path()).await;
+        assert!(!v["command_succeeded"].as_bool().unwrap());
         assert_eq!(v["stdout"], "done");
         assert_eq!(v["exit_code"], 7);
         let v = run("shell", &json!({"command":large}).to_string(), d.path()).await;
+        assert!(v["command_succeeded"].as_bool().unwrap());
         assert!(v["stdout_truncated"].as_bool().unwrap());
         assert!(v["stdout"].as_str().unwrap().ends_with("TAIL"));
         let v = run(
@@ -521,6 +523,7 @@ mod tests {
             d.path(),
         )
         .await;
+        assert!(!v["command_succeeded"].as_bool().unwrap());
         assert!(v["timed_out"].as_bool().unwrap());
     }
 }
