@@ -1,6 +1,6 @@
 [package]
 name = "deepseek-cli"
-version = "2026.714.0"
+version = "2026.714.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
