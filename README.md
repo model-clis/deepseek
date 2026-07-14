@@ -4,6 +4,8 @@
 
 A stateless DeepSeek subagent CLI and an Agent Skill for delegating bounded consultations and safe independent implementations. The CLI gives the model local shell capabilities; the caller remains responsible for scope, safety, and verification.
 
+The CLI currently pins the model ID to `deepseek-v4-flash` (DeepSeek V4 Flash).
+
 ## Install
 
 The skill and CLI are installed separately.

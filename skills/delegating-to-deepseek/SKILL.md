@@ -8,6 +8,8 @@ compatibility: "Requires the deepseek CLI, network access to the DeepSeek API, a
 
 Use the stateless `deepseek` CLI as a general-purpose subagent. Decide whether each call is read-only or may safely edit files, then send a fully self-contained ordinary prompt. The CLI has no modes; never tell DeepSeek to use “consult mode” or any other nonexistent mode.
 
+The CLI currently pins the model ID to `deepseek-v4-flash` (DeepSeek V4 Flash). Do not ask callers to choose a model or imply that the model can be overridden per invocation.
+
 ## Safety gate
 
 The caller—not the CLI—must classify the task. The CLI provides no permission isolation.

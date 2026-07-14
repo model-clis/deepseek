@@ -4,6 +4,8 @@
 
 无状态 DeepSeek 子代理 CLI，以及用于委托边界清晰的只读咨询和安全独立实现的 Agent Skill。CLI 为模型提供本地 shell 能力；调用方始终负责范围、安全判断和结果验证。
 
+CLI 当前锁定的模型 ID 为 `deepseek-v4-flash`（DeepSeek V4 Flash）。
+
 ## 安装
 
 Skill 与 CLI 需要分别安装。
