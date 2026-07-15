@@ -63,7 +63,7 @@ CLI 无状态，也没有咨询/执行模式。Prompt 必须完全自包含。Ag
 
 ## 开发
 
-需要 Rust 1.85 或更高版本。
+需要 Rust 1.89 或更高版本。
 
 ```sh
 cargo fmt --all -- --check

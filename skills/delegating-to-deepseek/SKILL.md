@@ -1,6 +1,6 @@
 ---
 name: delegating-to-deepseek
-description: "Delegate investigation, code search, evidence gathering, debugging, review, planning, code changes, and implementation to DeepSeek. Use whenever a task or bounded subtask can be delegated: inexpensive search can quickly narrow scope, delegated edits save higher-cost model work, and parallel calls reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
+description: "Delegate investigation, code search, evidence gathering, debugging, code changes, and implementation to DeepSeek. Use whenever a task or bounded subtask can be delegated: inexpensive search can quickly narrow scope, delegated edits save higher-cost model work, and parallel calls reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
 compatibility: "Requires the deepseek CLI, network access to the DeepSeek API, and an API key configured by the user with deepseek login. The caller's shell tool must support invoking the CLI."
 ---
 
@@ -25,6 +25,12 @@ If execution crosses this boundary, refuse delegation. Do not weaken the boundar
 ## Scope and decomposition
 
 Split large work into bounded, stateless calls. Read-only calls are usually safe to run concurrently. Execute calls may run concurrently only when their file scopes do not overlap. Never concurrently delegate work touching the same file, formatting, dependencies, Git, or code generation. You must synthesize all reports and inspect the workspace afterward.
+
+## Judgment boundary
+
+Use DeepSeek primarily as a worker and evidence gatherer, not as the authority for architecture, safety, correctness, or final review. Do not delegate a task whose main output is a recommendation, design decision, risk judgment, or approval unless the user explicitly asks for DeepSeek's opinion or multi-model brainstorming.
+
+DeepSeek may gather evidence, check an implementation against explicit criteria, or draft alternatives for a decision. You must independently evaluate that work and make the final judgment.
 
 ## Build the prompt
 

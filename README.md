@@ -63,7 +63,7 @@ The model can use local shell tools, but the CLI is not a permission sandbox. Ne
 
 ## Development
 
-Requires Rust 1.85 or newer.
+Requires Rust 1.89 or newer.
 
 ```sh
 cargo fmt --all -- --check

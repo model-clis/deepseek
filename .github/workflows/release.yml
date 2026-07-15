@@ -59,7 +59,7 @@ jobs:
         env:
           VERSION: ${{ steps.plan.outputs.version }}
       - if: steps.plan.outputs.release == 'true'
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: rustfmt, clippy
       - if: steps.plan.outputs.release == 'true'
@@ -99,7 +99,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: release-source
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.89.0
         with:
           targets: ${{ matrix.target }}
       - if: runner.os == 'Linux'

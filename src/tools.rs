@@ -14,6 +14,8 @@ use tokio::{
     time::{Duration, timeout},
 };
 
+use crate::search::{SearchArgs, SearchSession};
+
 const MAX_OUTPUT: usize = 50 * 1024;
 const MAX_LINE: usize = 128 * 1024;
 
@@ -91,6 +93,11 @@ pub fn definitions() -> Vec<Value> {
             json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"]}),
         ),
         def(
+            "search",
+            "Find files or file contents in the startup workspace, respecting ignore rules. File queries tolerate typos; content queries use plain (default), regex, or fuzzy mode. Narrow the query if truncated",
+            json!({"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["files","content"]},"query":{"type":"string","minLength":1,"maxLength":4096},"mode":{"type":"string","enum":["plain","regex","fuzzy"],"description":"Content mode; defaults to plain and is ignored for file search"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":20}},"required":["kind","query"]}),
+        ),
+        def(
             "write",
             "Atomically create or replace a file with the exact supplied UTF-8 content",
             json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","minLength":1},"content":{"type":"string"}},"required":["path","content"]}),
@@ -114,8 +121,63 @@ fn absolute(cwd: &Path, p: &str) -> PathBuf {
     let p = PathBuf::from(p);
     if p.is_absolute() { p } else { cwd.join(p) }
 }
-fn error(s: impl ToString) -> String {
-    json!({"ok":false,"error":s.to_string()}).to_string()
+fn error(
+    code: &str,
+    message: impl ToString,
+    hint: impl Into<Option<&'static str>>,
+    retryable: bool,
+) -> String {
+    let mut result = json!({
+        "ok": false,
+        "error_code": code,
+        "error": message.to_string(),
+        "retryable": retryable,
+    });
+    if let Some(hint) = hint.into() {
+        result["hint"] = json!(hint);
+    }
+    result.to_string()
+}
+
+fn invalid_arguments(tool: &str, message: impl ToString) -> String {
+    error(
+        "invalid_arguments",
+        message,
+        Some(match tool {
+            "read" => "Provide a non-empty path, offset >= 1, and limit from 1 through 2000.",
+            "write" => "Provide a non-empty file path and the complete content to write.",
+            "edit" => "Provide a non-empty path and old_text that matches exactly once.",
+            "shell" => "Provide a non-empty command and timeout_seconds from 1 through 3600.",
+            _ => "Check the tool parameters against its schema and retry.",
+        }),
+        false,
+    )
+}
+
+fn failure(tool: &str, message: impl ToString) -> String {
+    let (code, hint) = match tool {
+        "read" => (
+            "read_failed",
+            "Verify the path is a readable regular UTF-8 file.",
+        ),
+        "write" => (
+            "write_failed",
+            "Verify the target path and parent directory permissions.",
+        ),
+        "edit" => (
+            "edit_failed",
+            "Read the file again, then retry with an exact unique match.",
+        ),
+        "shell" => (
+            "shell_failed",
+            "Inspect the error and retry with a simpler command if appropriate.",
+        ),
+        _ => (
+            "tool_failed",
+            "Check the error and choose an appropriate next action.",
+        ),
+    };
+    error(code, message, Some(hint), false)
 }
 
 #[derive(Deserialize)]
@@ -160,16 +222,31 @@ fn parse<T: for<'a> Deserialize<'a>>(args: &str) -> Result<T, String> {
     serde_json::from_str(args).map_err(|e| format!("Invalid arguments: {e}"))
 }
 
-pub async fn execute(name: &str, args: &str, cwd: &Path, shell_info: &ShellInfo) -> String {
+pub async fn execute(
+    name: &str,
+    args: &str,
+    cwd: &Path,
+    shell_info: &ShellInfo,
+    search: &SearchSession,
+) -> String {
     match name {
-        "read" => parse(args).map_or_else(error, |a| read(a, cwd)),
-        "write" => parse(args).map_or_else(error, |a| write(a, cwd)),
-        "edit" => parse(args).map_or_else(error, |a| edit(a, cwd)),
+        "read" => parse(args).map_or_else(|e| invalid_arguments("read", e), |a| read(a, cwd)),
+        "search" => match parse::<SearchArgs>(args) {
+            Ok(a) => search.execute(a).await,
+            Err(e) => crate::search::invalid_arguments(e),
+        },
+        "write" => parse(args).map_or_else(|e| invalid_arguments("write", e), |a| write(a, cwd)),
+        "edit" => parse(args).map_or_else(|e| invalid_arguments("edit", e), |a| edit(a, cwd)),
         "shell" => match parse(args) {
             Ok(a) => shell(a, cwd, shell_info).await,
-            Err(e) => error(e),
+            Err(e) => invalid_arguments("shell", e),
         },
-        _ => error(format!("Unknown tool: {name}")),
+        _ => error(
+            "unknown_tool",
+            format!("Unknown tool: {name}"),
+            Some("Use one of the tools supplied in the current request."),
+            false,
+        ),
     }
 }
 
@@ -214,23 +291,30 @@ fn logical_line(r: &mut impl BufRead) -> Result<Option<(Vec<u8>, bool)>, String>
 
 fn read(a: ReadArgs, cwd: &Path) -> String {
     if let Err(e) = valid_path(&a.path) {
-        return error(e);
+        return invalid_arguments("read", e);
     }
     if a.offset < 1 {
-        return error("offset must be at least 1");
+        return invalid_arguments("read", "offset must be at least 1");
     }
     if !(1..=2000).contains(&a.limit) {
-        return error("limit must be from 1 through 2000");
+        return invalid_arguments("read", "limit must be from 1 through 2000");
     }
     let path = absolute(cwd, &a.path);
     match std::fs::metadata(&path) {
         Ok(m) if m.is_file() => {}
-        Ok(_) => return error("Path is not a regular file"),
-        Err(e) => return error(e),
+        Ok(_) => {
+            return error(
+                "not_a_file",
+                "Path is not a regular file",
+                Some("Provide the path to a regular UTF-8 file."),
+                false,
+            );
+        }
+        Err(e) => return failure("read", e),
     }
     let file = match std::fs::File::open(&path) {
         Ok(f) => f,
-        Err(e) => return error(e),
+        Err(e) => return failure("read", e),
     };
     let mut r = std::io::BufReader::new(file);
     let mut content = Vec::new();
@@ -245,23 +329,33 @@ fn read(a: ReadArgs, cwd: &Path) -> String {
                     next_offset = Some(line_number + 1);
                     break;
                 }
-                Err(e) => return error(e),
+                Err(e) => return failure("read", e),
             }
         }
         let (mut line, ended) = match logical_line(&mut r) {
             Ok(Some(line)) => line,
             Ok(None) => break,
-            Err(e) => return error(e),
+            Err(e) => return failure("read", e),
         };
         line_number += 1;
         if line_number == 1 && line.starts_with(b"\xef\xbb\xbf") {
             line.drain(..3);
         }
         if line.contains(&0) {
-            return error("File contains NUL bytes");
+            return error(
+                "not_utf8_text",
+                "File contains NUL bytes",
+                Some("Use shell for binary data or choose a UTF-8 text file."),
+                false,
+            );
         }
         if std::str::from_utf8(&line).is_err() {
-            return error("File is not valid UTF-8");
+            return error(
+                "not_utf8_text",
+                "File is not valid UTF-8",
+                Some("Use shell for binary data or choose a UTF-8 text file."),
+                false,
+            );
         }
         if line_number < a.offset {
             continue;
@@ -278,7 +372,12 @@ fn read(a: ReadArgs, cwd: &Path) -> String {
         taken += 1;
     }
     if a.offset > 1 && line_number < a.offset {
-        return error("offset exceeds file length");
+        return error(
+            "offset_out_of_range",
+            "offset exceeds file length",
+            Some("Retry with a smaller 1-based offset."),
+            false,
+        );
     }
     let mut result = json!({"ok":true,"content":String::from_utf8(content).unwrap()});
     if let Some(next) = next_offset {
@@ -311,17 +410,17 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 fn write(a: WriteArgs, cwd: &Path) -> String {
     if let Err(e) = valid_path(&a.path) {
-        return error(e);
+        return invalid_arguments("write", e);
     }
     let path = absolute(cwd, &a.path);
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            return error(e);
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return failure("write", e);
     }
     match atomic_write(&path, a.content.as_bytes()) {
         Ok(()) => json!({"ok":true}).to_string(),
-        Err(e) => error(e),
+        Err(e) => failure("write", e),
     }
 }
 
@@ -432,19 +531,19 @@ fn replacement_bytes(
 
 fn edit(a: EditArgs, cwd: &Path) -> String {
     if let Err(e) = valid_path(&a.path) {
-        return error(e);
+        return invalid_arguments("edit", e);
     }
     if a.old_text.is_empty() {
-        return error("old_text must not be empty");
+        return invalid_arguments("edit", "old_text must not be empty");
     }
     let path = absolute(cwd, &a.path);
     let target = match atomic_target(&path) {
         Ok(target) => target,
-        Err(e) => return error(e),
+        Err(e) => return failure("edit", e),
     };
     let bytes = match std::fs::read(&target) {
         Ok(v) => v,
-        Err(e) => return error(e),
+        Err(e) => return failure("edit", e),
     };
     let (bom, payload) = if bytes.starts_with(b"\xef\xbb\xbf") {
         (&bytes[..3], &bytes[3..])
@@ -452,24 +551,48 @@ fn edit(a: EditArgs, cwd: &Path) -> String {
         (&bytes[..0], bytes.as_slice())
     };
     if payload.contains(&0) {
-        return error("File contains NUL bytes");
+        return error(
+            "not_utf8_text",
+            "File contains NUL bytes",
+            Some("Edit only supports UTF-8 text files without NUL bytes."),
+            false,
+        );
     }
     let text = match std::str::from_utf8(payload) {
         Ok(text) => text,
-        Err(_) => return error("File is not valid UTF-8"),
+        Err(_) => {
+            return error(
+                "not_utf8_text",
+                "File is not valid UTF-8",
+                Some("Edit only supports UTF-8 text files."),
+                false,
+            );
+        }
     };
     let source = normalize_eols(text);
     let old_text = a.old_text.strip_prefix('\u{feff}').unwrap_or(&a.old_text);
     let old_text = normalize_eols(old_text).text;
     if old_text.is_empty() {
-        return error("old_text must not be empty after removing a UTF-8 BOM");
+        return invalid_arguments(
+            "edit",
+            "old_text must not be empty after removing a UTF-8 BOM",
+        );
     }
     let matches: Vec<_> = source.text.match_indices(&old_text).take(2).collect();
     if matches.len() != 1 {
-        return error(format!(
-            "old_text matched {} times; exactly one match is required",
-            matches.len()
-        ));
+        return error(
+            if matches.is_empty() {
+                "match_not_found"
+            } else {
+                "match_not_unique"
+            },
+            format!(
+                "old_text matched {} times; exactly one match is required",
+                matches.len()
+            ),
+            Some("Read the file again and include enough surrounding text to match exactly once."),
+            false,
+        );
     }
     let normalized_start = matches[0].0;
     let normalized_end = normalized_start + old_text.len();
@@ -478,7 +601,14 @@ fn edit(a: EditArgs, cwd: &Path) -> String {
     let replacement =
         match replacement_bytes(&a.new_text, &source, normalized_start, normalized_end) {
             Ok(replacement) => replacement,
-            Err(e) => return error(e),
+            Err(e) => {
+                return error(
+                    "newline_mismatch",
+                    e,
+                    Some("Use a smaller edit or preserve the matched region's newline count."),
+                    false,
+                );
+            }
         };
     let mut result = Vec::with_capacity(bytes.len() - (end - start) + replacement.len());
     result.extend_from_slice(bom);
@@ -487,7 +617,7 @@ fn edit(a: EditArgs, cwd: &Path) -> String {
     result.extend_from_slice(&payload[end..]);
     match atomic_write(&target, &result) {
         Ok(()) => json!({"ok":true}).to_string(),
-        Err(e) => error(e),
+        Err(e) => failure("edit", e),
     }
 }
 
@@ -613,16 +743,16 @@ fn rendered_capture(head: Vec<u8>, tail: Option<TruncatedCapture>) -> (String, b
     const MARKER: &str = "\n...[truncated]...\n";
     if let Some((after_head, before_tail, mut tail)) = tail {
         let mut head = head;
-        if let Err(error) = std::str::from_utf8(&head) {
-            if error.error_len().is_none() {
-                let start = error.valid_up_to();
-                for length in 1..=after_head.len() {
-                    let mut boundary = head[start..].to_vec();
-                    boundary.extend_from_slice(&after_head[..length]);
-                    if std::str::from_utf8(&boundary).is_ok_and(|text| text.chars().count() == 1) {
-                        head.truncate(start);
-                        break;
-                    }
+        if let Err(error) = std::str::from_utf8(&head)
+            && error.error_len().is_none()
+        {
+            let start = error.valid_up_to();
+            for length in 1..=after_head.len() {
+                let mut boundary = head[start..].to_vec();
+                boundary.extend_from_slice(&after_head[..length]);
+                if std::str::from_utf8(&boundary).is_ok_and(|text| text.chars().count() == 1) {
+                    head.truncate(start);
+                    break;
                 }
             }
         }
@@ -637,11 +767,12 @@ fn rendered_capture(head: Vec<u8>, tail: Option<TruncatedCapture>) -> (String, b
                 let prefix = &before_tail[start..];
                 let mut candidate = prefix.to_vec();
                 candidate.extend_from_slice(&tail[..leading_continuations]);
-                if let Ok(character) = std::str::from_utf8(&candidate) {
-                    if character.chars().count() == 1 && prefix.len() < character.len() {
-                        crossing = true;
-                        break;
-                    }
+                if let Ok(character) = std::str::from_utf8(&candidate)
+                    && character.chars().count() == 1
+                    && prefix.len() < character.len()
+                {
+                    crossing = true;
+                    break;
                 }
             }
             if crossing {
@@ -681,10 +812,10 @@ fn rendered_capture(head: Vec<u8>, tail: Option<TruncatedCapture>) -> (String, b
 
 async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
     if a.command.is_empty() {
-        return error("command must not be empty");
+        return invalid_arguments("shell", "command must not be empty");
     }
     if !(1..=3600).contains(&a.timeout_seconds) {
-        return error("timeout_seconds must be from 1 through 3600");
+        return invalid_arguments("shell", "timeout_seconds must be from 1 through 3600");
     }
     let mut cmd = Command::new(&info.program);
     #[cfg(windows)]
@@ -710,7 +841,7 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
         .stderr(Stdio::piped());
     let mut child = match cmd.group().kill_on_drop(true).spawn() {
         Ok(c) => c,
-        Err(e) => return error(e),
+        Err(e) => return failure("shell", e),
     };
     let out = child.inner().stdout.take().unwrap();
     let err = child.inner().stderr.take().unwrap();
@@ -720,16 +851,26 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
     let timed_out = waited.is_err();
     let status = if timed_out {
         if let Err(e) = child.kill().await {
-            return error(format!("Failed to terminate timed-out process group: {e}"));
+            return failure(
+                "shell",
+                format!("Failed to terminate timed-out process group: {e}"),
+            );
         }
         match child.wait().await {
             Ok(status) => status,
-            Err(e) => return error(format!("Failed to reap timed-out process group: {e}")),
+            Err(e) => {
+                return failure(
+                    "shell",
+                    format!("Failed to reap timed-out process group: {e}"),
+                );
+            }
         }
     } else {
         match waited.expect("non-timeout wait result") {
             Ok(status) => status,
-            Err(e) => return error(format!("Failed to wait for process group: {e}")),
+            Err(e) => {
+                return failure("shell", format!("Failed to wait for process group: {e}"));
+            }
         }
     };
     let joins = timeout(Duration::from_secs(2), async {
@@ -741,7 +882,7 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
         _ => {
             ro.abort();
             re.abort();
-            return error("Output readers did not finish");
+            return failure("shell", "Output readers did not finish");
         }
     };
     let (stdout, stdout_truncated, stdout_invalid) = {
@@ -760,16 +901,25 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
         "failed"
     };
     let mut result = json!({"ok":true,"status":state});
-    if !timed_out && !status.success() {
-        if let Some(code) = status.code() {
-            result["exit_code"] = json!(code);
-        }
+    if !timed_out
+        && !status.success()
+        && let Some(code) = status.code()
+    {
+        result["exit_code"] = json!(code);
     }
     if !stdout.is_empty() {
         result["stdout"] = json!(stdout);
     }
     if !stderr.is_empty() {
         result["stderr"] = json!(stderr);
+    }
+    if timed_out {
+        result["hint"] = json!(
+            "Narrow the command or retry with a larger timeout_seconds value when appropriate."
+        );
+    } else if !status.success() {
+        result["hint"] =
+            json!("Inspect stderr and exit_code before adjusting or retrying the command.");
     }
     for (name, value) in [
         ("stdout_truncated", stdout_truncated),
@@ -790,13 +940,23 @@ mod tests {
     use std::collections::BTreeSet;
 
     async fn run(name: &str, args: &str, dir: &Path) -> Value {
-        serde_json::from_str(&execute(name, args, dir, &ShellInfo::detect().unwrap()).await)
-            .unwrap()
+        serde_json::from_str(
+            &execute(
+                name,
+                args,
+                dir,
+                &ShellInfo::detect().unwrap(),
+                &SearchSession::unavailable(),
+            )
+            .await,
+        )
+        .unwrap()
     }
 
     #[cfg(windows)]
     async fn run_with_shell(name: &str, args: &str, dir: &Path, shell: &ShellInfo) -> Value {
-        serde_json::from_str(&execute(name, args, dir, shell).await).unwrap()
+        serde_json::from_str(&execute(name, args, dir, shell, &SearchSession::unavailable()).await)
+            .unwrap()
     }
 
     fn keys(value: &Value) -> BTreeSet<&str> {
@@ -811,7 +971,7 @@ mod tests {
     #[test]
     fn definitions_are_small_strict_and_describe_text_adaptation() {
         let definitions = definitions();
-        assert_eq!(definitions.len(), 4);
+        assert_eq!(definitions.len(), 5);
         for definition in &definitions {
             assert_eq!(
                 definition["function"]["parameters"]["additionalProperties"],
@@ -825,7 +985,7 @@ mod tests {
                 .contains("BOM")
         );
         assert!(
-            definitions[2]["function"]["description"]
+            definitions[3]["function"]["description"]
                 .as_str()
                 .unwrap()
                 .contains("CRLF")
@@ -1143,7 +1303,7 @@ mod tests {
         assert_eq!(v["exit_code"], 7);
         assert_eq!(
             keys(&v),
-            BTreeSet::from(["exit_code", "ok", "status", "stdout"])
+            BTreeSet::from(["exit_code", "hint", "ok", "status", "stdout"])
         );
         let v = run("shell", &json!({"command":large}).to_string(), d.path()).await;
         assert_eq!(v["status"], "success");
@@ -1155,7 +1315,29 @@ mod tests {
             d.path(),
         )
         .await;
-        assert_eq!(v, json!({"ok":true,"status":"timed_out"}));
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["status"], "timed_out");
+        assert!(v["hint"].as_str().unwrap().contains("timeout_seconds"));
+    }
+
+    #[tokio::test]
+    async fn tool_errors_include_codes_hints_and_retryability() {
+        let d = tempfile::tempdir().unwrap();
+        let invalid = run("read", r#"{"path":"x","limit":0}"#, d.path()).await;
+        assert_eq!(invalid["ok"], false);
+        assert_eq!(invalid["error_code"], "invalid_arguments");
+        assert!(invalid["hint"].as_str().unwrap().contains("limit"));
+        assert_eq!(invalid["retryable"], false);
+
+        std::fs::write(d.path().join("x"), "same same").unwrap();
+        let ambiguous = run(
+            "edit",
+            r#"{"path":"x","old_text":"same","new_text":"new"}"#,
+            d.path(),
+        )
+        .await;
+        assert_eq!(ambiguous["error_code"], "match_not_unique");
+        assert!(ambiguous["hint"].as_str().unwrap().contains("exactly once"));
     }
 
     #[test]
