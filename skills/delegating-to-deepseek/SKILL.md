@@ -1,18 +1,24 @@
 ---
 name: delegating-to-deepseek
-description: "Delegate investigation, code search, evidence gathering, debugging, code changes, and implementation to DeepSeek. Use whenever a task or bounded subtask can be delegated: inexpensive search can quickly narrow scope, delegated edits save higher-cost model work, and parallel calls reduce elapsed time. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
+description: "Delegate high-effort, mechanical, or context-heavy work to DeepSeek: broad or multi-step code search, evidence gathering across files, repetitive inspection, output-heavy investigation, test repair, well-scoped implementation, and independent parallel subtasks. Use when delegation would materially reduce your work, or whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
 compatibility: "Requires the deepseek CLI, network access to the DeepSeek API, and an API key configured by the user with deepseek login. The caller's shell tool must support invoking the CLI."
 ---
 
 # Delegating to DeepSeek
 
-Use the stateless `deepseek` CLI as a general-purpose subagent. Decide whether each call is read-only or may safely edit files, then send a fully self-contained ordinary prompt. The CLI has no modes; never tell DeepSeek to use “consult mode” or any other nonexistent mode.
+Use the stateless `deepseek` CLI as a worker for bounded tasks whose volume, repetition, or context cost would distract you from synthesis and judgment. Decide whether each call is read-only or may safely edit files, then send a fully self-contained ordinary prompt.
 
 The CLI currently pins the model ID to `deepseek-v4-flash` (DeepSeek V4 Flash).
 
 ## Capability context
 
 DeepSeek starts with local file and shell tools and does not automatically inherit the web, browser, MCP, connected-service, or skill capabilities available to you. If a task would benefit from a reusable skill, include the skill's absolute path in the prompt and ask DeepSeek to read it before acting; make sure any commands or local resources required by that skill are also available. When a capability cannot be provided this way, handle that part yourself and pass the relevant results to DeepSeek as context.
+
+## Delegation threshold
+
+Delegate the dirty work: broad searches, repeated inspections, large-output commands, evidence collection, independent verification, test-failure triage, and implementation with clear file boundaries and acceptance criteria. A good delegated task has a concrete deliverable and saves you more effort than it costs to explain and verify.
+
+Work directly when the task is already small and obvious, such as reading one known file, finding an exact symbol, making a tiny local edit, running one focused command, answering a brief follow-up, or reporting status. Use DeepSeek as needed; you do not need to invoke it on every subsequent turn.
 
 ## Safety gate
 
