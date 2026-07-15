@@ -794,6 +794,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(windows)]
     async fn run_with_shell(name: &str, args: &str, dir: &Path, shell: &ShellInfo) -> Value {
         serde_json::from_str(&execute(name, args, dir, shell).await).unwrap()
     }
