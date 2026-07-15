@@ -8,6 +8,7 @@
   - `cargo +1.89.0 fmt --all -- --check`
   - `cargo +1.89.0 clippy --locked --all-targets --all-features -- -D warnings`
   - `cargo +1.89.0 test --locked --all-targets --all-features`
+- `model-clis/homebrew-packages` 是本项目的下游包元数据仓库，维护 Homebrew Formula 和 Scoop manifest。发布新版本，或修改 release 资产名称、校验和及安装方式后，应在 release 完成后运行该仓库的 `Update packages` workflow，并确认生成文件校验与提交步骤成功。
 - 保持工具接口小而明确。结果应为稳定、结构化且有界的 JSON；错误应包含足够的上下文和可执行的恢复提示。区分工具基础设施失败与被执行操作自身的失败状态。
 - `fff-search` 使用固定 Git revision。每次 agent run 复用同一个搜索会话；初始化失败不得影响其他工具。搜索应遵守 workspace 和 ignore 边界，无效正则不得静默改变语义，查询、错误和结果输出必须有界。
 
