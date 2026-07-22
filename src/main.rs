@@ -64,6 +64,8 @@ async fn run() -> Result<agent::Outcome> {
     let _ = cli.capture_diagnostics;
     match cli.command {
         Some(Command::Login) => {
+            #[cfg(windows)]
+            let _ = tools::ShellInfo::detect().map_err(anyhow::Error::msg)?;
             if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
                 bail!("login requires an interactive terminal");
             }

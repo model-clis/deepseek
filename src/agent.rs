@@ -93,8 +93,8 @@ fn is_context(e: &anyhow::Error) -> bool {
 }
 
 pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -> Result<Outcome> {
-    let defs = tools::definitions();
     let shell_info = tools::ShellInfo::detect().map_err(anyhow::Error::msg)?;
+    let defs = tools::definitions(&shell_info);
     let search = crate::search::SearchSession::new(&cwd);
     let mut history = vec![
         msg("system", system(&cwd, &shell_info)),

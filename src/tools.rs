@@ -8,6 +8,8 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
 };
+#[cfg(windows)]
+use tokio::io::AsyncWriteExt;
 use tokio::{
     io::AsyncReadExt,
     process::Command,
@@ -19,6 +21,27 @@ use crate::search::{SearchArgs, SearchSession};
 const MAX_OUTPUT: usize = 50 * 1024;
 const MAX_LINE: usize = 128 * 1024;
 
+#[cfg(windows)]
+const POWERSHELL_WRAPPER: &str = concat!(
+    "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); ",
+    "if ($null -ne $PSStyle) { $PSStyle.OutputRendering = 'PlainText' }; ",
+    "$global:LASTEXITCODE = $null; ",
+    "$__deepseek_source = [Console]::In.ReadToEnd(); ",
+    "try { $__deepseek_script = [ScriptBlock]::Create($__deepseek_source) } ",
+    "catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }; ",
+    "& $__deepseek_script; exit ($? ? 0 : 1)",
+);
+
+#[cfg(windows)]
+const POWERSHELL_EXIT_EPILOGUE: &str = concat!(
+    "\n; $__deepseek_ok = $?; $__deepseek_exit = $LASTEXITCODE; ",
+    "if ($__deepseek_ok) { exit 0 } ",
+    "elseif ($null -ne $__deepseek_exit -and $__deepseek_exit -ne 0) ",
+    "{ exit $__deepseek_exit } else { exit 1 }",
+);
+
 #[derive(Clone, Debug)]
 pub struct ShellInfo {
     program: PathBuf,
@@ -26,66 +49,92 @@ pub struct ShellInfo {
 }
 
 impl ShellInfo {
+    #[cfg(windows)]
     pub fn detect() -> Result<Self, String> {
-        #[cfg(windows)]
-        let (program, name) = {
-            let found = |name: &str| {
-                std::process::Command::new("where.exe")
-                    .arg(name)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .and_then(|s| s.lines().next().map(PathBuf::from))
-            };
-            found("pwsh.exe")
-                .map(|p| (p, "PowerShell (pwsh)"))
-                .or_else(|| found("powershell.exe").map(|p| (p, "Windows PowerShell")))
-                .ok_or_else(|| {
-                    "Neither pwsh.exe nor powershell.exe was found on PATH".to_string()
-                })?
-        };
-        #[cfg(unix)]
-        let (program, name) = {
-            let program = PathBuf::from("/bin/sh");
-            if !program.is_file() {
-                return Err("/bin/sh was not found".into());
-            }
-            (program, "/bin/sh")
-        };
-        let mut version_command = std::process::Command::new(&program);
-        #[cfg(windows)]
-        version_command.args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$PSVersionTable.PSVersion.ToString()",
-        ]);
-        #[cfg(unix)]
-        version_command.arg("--version");
-        let version = version_command
+        const INSTALL_HINT: &str = "PowerShell 7+ (`pwsh.exe`) is required on Windows. Install it from https://github.com/PowerShell/PowerShell, ensure pwsh.exe is on PATH, then rerun deepseek login.";
+        let program = PathBuf::from("pwsh.exe");
+        let output = std::process::Command::new(&program)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$PSVersionTable.PSVersion.ToString()",
+            ])
+            .output()
+            .map_err(|error| format!("Failed to run pwsh.exe: {error}. {INSTALL_HINT}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "pwsh.exe failed its version check with status {}. {INSTALL_HINT}",
+                output.status
+            ));
+        }
+        let version = String::from_utf8(output.stdout)
+            .ok()
+            .and_then(|text| {
+                text.trim_start_matches('\u{feff}')
+                    .lines()
+                    .next()
+                    .map(str::trim)
+                    .map(str::to_owned)
+            })
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| format!("pwsh.exe returned an invalid version. {INSTALL_HINT}"))?;
+        let major = version
+            .split('.')
+            .next()
+            .and_then(|part| part.parse::<u32>().ok())
+            .ok_or_else(|| format!("pwsh.exe returned version `{version}`. {INSTALL_HINT}"))?;
+        if major < 7 {
+            return Err(format!(
+                "pwsh.exe reported version {version}, but PowerShell 7+ is required. {INSTALL_HINT}"
+            ));
+        }
+        Ok(Self {
+            program,
+            description: format!("PowerShell 7 (pwsh); {version}"),
+        })
+    }
+
+    #[cfg(unix)]
+    pub fn detect() -> Result<Self, String> {
+        let program = PathBuf::from("/bin/sh");
+        if !program.is_file() {
+            return Err("/bin/sh was not found".into());
+        }
+        let version = std::process::Command::new(&program)
+            .arg("--version")
             .output()
             .ok()
             .filter(|output| output.status.success())
-            .map(|o| {
-                if o.stdout.is_empty() {
-                    o.stderr
+            .map(|output| {
+                if output.stdout.is_empty() {
+                    output.stderr
                 } else {
-                    o.stdout
+                    output.stdout
                 }
             })
-            .and_then(|b| String::from_utf8(b).ok())
-            .and_then(|s| s.lines().next().map(str::to_owned))
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|text| text.lines().next().map(str::to_owned))
             .unwrap_or_else(|| "version unavailable".into());
         Ok(Self {
             program,
-            description: format!("{name}; {version}"),
+            description: format!("/bin/sh; {version}"),
         })
     }
 }
 
-pub fn definitions() -> Vec<Value> {
+pub fn definitions(shell: &ShellInfo) -> Vec<Value> {
+    #[cfg(windows)]
+    let shell_description = format!(
+        "Run a non-interactive PowerShell 7 command in the startup cwd (detected {}). Use PowerShell syntax: single quotes are literal, backtick is the escape character, and environment variables use `$env:NAME = 'value'; command`. The default timeout is 600 seconds (maximum 3600). Check status for success, failure, or timeout; stdout and stderr are omitted when empty",
+        shell.description
+    );
+    #[cfg(unix)]
+    let shell_description = format!(
+        "Run a non-interactive /bin/sh command in the startup cwd (detected {}). The default timeout is 600 seconds (maximum 3600). Check status for success, failure, or timeout; stdout and stderr are omitted when empty",
+        shell.description
+    );
     vec![
         def(
             "read",
@@ -109,8 +158,8 @@ pub fn definitions() -> Vec<Value> {
         ),
         def(
             "shell",
-            "Run a non-interactive shell command. Check status for success, failure, or timeout; stdout and stderr are omitted when empty",
-            json!({"type":"object","additionalProperties":false,"properties":{"command":{"type":"string","minLength":1},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600}},"required":["command"]}),
+            &shell_description,
+            json!({"type":"object","additionalProperties":false,"properties":{"command":{"type":"string","minLength":1},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600,"default":600}},"required":["command"]}),
         ),
     ]
 }
@@ -810,6 +859,14 @@ fn rendered_capture(head: Vec<u8>, tail: Option<TruncatedCapture>) -> (String, b
     }
 }
 
+#[cfg(windows)]
+fn powershell_source(command: &str) -> String {
+    let mut source = String::with_capacity(command.len() + POWERSHELL_EXIT_EPILOGUE.len());
+    source.push_str(command);
+    source.push_str(POWERSHELL_EXIT_EPILOGUE);
+    source
+}
+
 async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
     if a.command.is_empty() {
         return invalid_arguments("shell", "command must not be empty");
@@ -823,8 +880,10 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
         "-Command",
-        &a.command,
+        POWERSHELL_WRAPPER,
     ]);
     #[cfg(unix)]
     cmd.args(["-c", &a.command]);
@@ -832,13 +891,17 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
         .env_remove("DEEPSEEK_API_KEY")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUNBUFFERED", "1")
         .env("NO_COLOR", "1")
         .env("FORCE_COLOR", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "Never")
-        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.stdin(Stdio::piped());
+    #[cfg(unix)]
+    cmd.stdin(Stdio::null());
     let mut child = match cmd.group().kill_on_drop(true).spawn() {
         Ok(c) => c,
         Err(e) => return failure("shell", e),
@@ -847,21 +910,38 @@ async fn shell(a: ShellArgs, cwd: &Path, info: &ShellInfo) -> String {
     let err = child.inner().stderr.take().unwrap();
     let mut ro = tokio::spawn(drain(out));
     let mut re = tokio::spawn(drain(err));
+    #[cfg(windows)]
+    {
+        let mut input = child.inner().stdin.take().unwrap();
+        if let Err(error) = input
+            .write_all(powershell_source(&a.command).as_bytes())
+            .await
+        {
+            let _ = child.start_kill();
+            ro.abort();
+            re.abort();
+            return failure(
+                "shell",
+                format!("Failed to send the command to PowerShell: {error}"),
+            );
+        }
+        drop(input);
+    }
     let waited = timeout(Duration::from_secs(a.timeout_seconds), child.wait()).await;
     let timed_out = waited.is_err();
     let status = if timed_out {
-        if let Err(e) = child.kill().await {
+        if let Err(e) = child.start_kill() {
             return failure(
                 "shell",
                 format!("Failed to terminate timed-out process group: {e}"),
             );
         }
-        match child.wait().await {
+        match child.inner().wait().await {
             Ok(status) => status,
             Err(e) => {
                 return failure(
                     "shell",
-                    format!("Failed to reap timed-out process group: {e}"),
+                    format!("Failed to reap the timed-out shell process: {e}"),
                 );
             }
         }
@@ -953,12 +1033,6 @@ mod tests {
         .unwrap()
     }
 
-    #[cfg(windows)]
-    async fn run_with_shell(name: &str, args: &str, dir: &Path, shell: &ShellInfo) -> Value {
-        serde_json::from_str(&execute(name, args, dir, shell, &SearchSession::unavailable()).await)
-            .unwrap()
-    }
-
     fn keys(value: &Value) -> BTreeSet<&str> {
         value
             .as_object()
@@ -968,9 +1042,41 @@ mod tests {
             .collect()
     }
 
+    #[cfg(windows)]
+    fn assert_windows_process_gone(pid: u32) {
+        let probe = format!(
+            "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}"
+        );
+        for _ in 0..20 {
+            let status = std::process::Command::new("pwsh.exe")
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &probe,
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            if status.success() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        panic!("nested process {pid} survived shell cleanup");
+    }
+
     #[test]
     fn definitions_are_small_strict_and_describe_text_adaptation() {
-        let definitions = definitions();
+        let shell = ShellInfo::detect().unwrap();
+        let definitions = definitions(&shell);
         assert_eq!(definitions.len(), 5);
         for definition in &definitions {
             assert_eq!(
@@ -989,6 +1095,13 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("CRLF")
+        );
+        let shell = definitions[4]["function"]["description"].as_str().unwrap();
+        assert!(shell.contains("600 seconds"));
+        assert!(!shell.contains("background"));
+        assert_eq!(
+            definitions[4]["function"]["parameters"]["properties"]["timeout_seconds"]["default"],
+            600
         );
     }
 
@@ -1394,13 +1507,13 @@ mod tests {
     async fn shell_sets_utf8_noninteractive_environment_and_captures_unicode() {
         let d = tempfile::tempdir().unwrap();
         #[cfg(windows)]
-        let command = "[Console]::Out.Write(\"中文🙂|$env:PYTHONUTF8|$env:PYTHONIOENCODING|$env:NO_COLOR|$env:GIT_TERMINAL_PROMPT|$([Environment]::CurrentDirectory)\")";
+        let command = "[Console]::Out.Write(\"中文🙂|$env:PYTHONUTF8|$env:PYTHONIOENCODING|$env:PYTHONUNBUFFERED|$env:NO_COLOR|$env:GIT_TERMINAL_PROMPT|$([Environment]::CurrentDirectory)\")";
         #[cfg(unix)]
-        let command = "printf '中文🙂|%s|%s|%s|%s|%s' \"$PYTHONUTF8\" \"$PYTHONIOENCODING\" \"$NO_COLOR\" \"$GIT_TERMINAL_PROMPT\" \"$PWD\"";
+        let command = "printf '中文🙂|%s|%s|%s|%s|%s|%s' \"$PYTHONUTF8\" \"$PYTHONIOENCODING\" \"$PYTHONUNBUFFERED\" \"$NO_COLOR\" \"$GIT_TERMINAL_PROMPT\" \"$PWD\"";
         let result = run("shell", &json!({"command":command}).to_string(), d.path()).await;
         assert_eq!(result["status"], "success");
         let stdout = result["stdout"].as_str().unwrap();
-        assert!(stdout.starts_with("中文🙂|1|utf-8|1|0|"));
+        assert!(stdout.starts_with("中文🙂|1|utf-8|1|1|0|"));
         assert!(stdout.contains(d.path().to_string_lossy().as_ref()));
 
         #[cfg(windows)]
@@ -1425,60 +1538,145 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn both_windows_powershell_versions_emit_unicode_and_python_utf8_when_available() {
+    async fn windows_requires_pwsh7_and_preserves_powershell_semantics() {
         let d = tempfile::tempdir().unwrap();
-        for (program, description) in [
-            ("pwsh.exe", "PowerShell 7"),
-            ("powershell.exe", "Windows PowerShell"),
-        ] {
-            let output = std::process::Command::new("where.exe")
-                .arg(program)
-                .output();
-            if !output.is_ok_and(|output| output.status.success()) {
-                continue;
-            }
-            let shell = ShellInfo {
-                program: PathBuf::from(program),
-                description: description.into(),
-            };
-            let result = run_with_shell(
-                "shell",
-                &json!({"command":"[Console]::Out.Write('中文🙂')"}).to_string(),
-                d.path(),
-                &shell,
-            )
-            .await;
-            assert_eq!(
-                result,
-                json!({"ok":true,"status":"success","stdout":"中文🙂"})
-            );
-            let result = run_with_shell(
-                "shell",
-                &json!({"command":"using namespace System.Text; param($value = 'grammar-ok'); [Console]::Out.Write($value)"}).to_string(),
-                d.path(),
-                &shell,
-            )
-            .await;
-            assert_eq!(
-                result,
-                json!({"ok":true,"status":"success","stdout":"grammar-ok"})
-            );
+        let shell = ShellInfo::detect().unwrap();
+        assert!(shell.description.starts_with("PowerShell 7 (pwsh);"));
 
-            if std::process::Command::new("where.exe")
-                .arg("python.exe")
-                .output()
-                .is_ok_and(|output| output.status.success())
-            {
-                let result = run_with_shell(
-                    "shell",
-                    &json!({"command":"python -c \"import sys; print(sys.stdout.encoding); print('中文🙂')\""}).to_string(),
-                    d.path(),
-                    &shell,
-                )
-                .await;
-                assert_eq!(result["status"], "success");
-                assert_eq!(result["stdout"], "utf-8\r\n中文🙂\r\n");
-            }
+        let result = run(
+            "shell",
+            &json!({"command":"[Console]::Out.Write('中文🙂')"}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(
+            result,
+            json!({"ok":true,"status":"success","stdout":"中文🙂"})
+        );
+        let result = run(
+            "shell",
+            &json!({"command":"using namespace System.Text; param($value = 'grammar-ok'); [Console]::Out.Write($value)"}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(
+            result,
+            json!({"ok":true,"status":"success","stdout":"grammar-ok"})
+        );
+
+        for (command, status, exit_code) in [
+            ("cmd /c exit 3", "failed", Some(3)),
+            (
+                "cmd /c exit 0; Get-Item C:\\definitely-missing-deepseek",
+                "failed",
+                Some(1),
+            ),
+            ("cmd /c exit 3; Get-Date | Out-Null", "success", None),
+            ("exit 7", "failed", Some(7)),
+        ] {
+            let result = run("shell", &json!({"command":command}).to_string(), d.path()).await;
+            assert_eq!(result["status"], status, "{command}: {result}");
+            assert_eq!(result.get("exit_code").and_then(Value::as_i64), exit_code);
         }
+
+        let comment = run(
+            "shell",
+            &json!({"command":"Write-Output 'comment-ok' # trailing comment"}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(comment["status"], "success");
+        assert_eq!(comment["stdout"], "comment-ok\r\n");
+        let backtick = run(
+            "shell",
+            &json!({"command":"[Console]::Out.Write('backtick-ok') `"}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(backtick["status"], "success");
+        assert_eq!(backtick["stdout"], "backtick-ok");
+
+        let error = run(
+            "shell",
+            &json!({"command":"Write-Error 'plain-error'"}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(error["status"], "failed");
+        assert!(error["stderr"].as_str().unwrap().contains("plain-error"));
+        assert!(!error["stderr"].as_str().unwrap().contains('\u{1b}'));
+
+        let hex = run(
+            "shell",
+            &json!({"command":"'中文' | pwsh -NoLogo -NoProfile -NonInteractive -Command '$s=[Console]::OpenStandardInput();$m=[IO.MemoryStream]::new();$s.CopyTo($m);[Console]::Out.Write(([Convert]::ToHexString($m.ToArray())).ToLower())'"}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(hex["status"], "success");
+        assert_eq!(hex["stdout"], "e4b8ade696870d0a");
+
+        if std::process::Command::new("where.exe")
+            .arg("npm.cmd")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            let result = run("shell", r#"{"command":"npm.cmd --version"}"#, d.path()).await;
+            assert_eq!(result["status"], "success");
+        }
+
+        if std::process::Command::new("where.exe")
+            .arg("python.exe")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            let result = run(
+                "shell",
+                &json!({"command":"python -c \"import sys; print(sys.stdout.encoding); print(int(sys.stdout.write_through)); print('中文🙂')\""}).to_string(),
+                d.path(),
+            )
+            .await;
+            assert_eq!(result["status"], "success");
+            assert_eq!(result["stdout"], "utf-8\r\n1\r\n中文🙂\r\n");
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_completed_call_does_not_leave_background_processes() {
+        let d = tempfile::tempdir().unwrap();
+        let command = "$p = Start-Process -FilePath pwsh -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30') -PassThru; [Console]::Out.Write(\"CHILD_PID=$($p.Id)\"); exit 0";
+        let result = run("shell", &json!({"command":command}).to_string(), d.path()).await;
+        assert_eq!(result["status"], "success");
+        let pid: u32 = result["stdout"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("CHILD_PID=")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_windows_process_gone(pid);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_timeout_kills_nested_process_tree() {
+        let d = tempfile::tempdir().unwrap();
+        let command = "$p = Start-Process -FilePath pwsh -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30') -PassThru; [Console]::Out.Write(\"CHILD_PID=$($p.Id)\"); Start-Sleep -Seconds 30";
+        let result = run(
+            "shell",
+            &json!({"command":command,"timeout_seconds":1}).to_string(),
+            d.path(),
+        )
+        .await;
+        assert_eq!(result["status"], "timed_out");
+        let stdout = result["stdout"].as_str().unwrap();
+        let pid: u32 = stdout
+            .strip_prefix("CHILD_PID=")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_windows_process_gone(pid);
     }
 }

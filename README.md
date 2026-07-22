@@ -6,6 +6,8 @@ A stateless DeepSeek subagent CLI and an Agent Skill for delegating bounded cons
 
 The CLI currently pins the model ID to `deepseek-v4-flash` (DeepSeek V4 Flash).
 
+On Windows, PowerShell 7+ (`pwsh.exe`) is required and must be on `PATH`; Windows PowerShell 5.1 is not supported. `deepseek login` checks this before asking for an API key and reports an installation hint when the requirement is not met.
+
 ## Install
 
 The skill and CLI are installed separately.
@@ -67,8 +69,8 @@ Requires Rust 1.89 or newer.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
 npx skills add . --list
 sh -n scripts/install.sh
 ```

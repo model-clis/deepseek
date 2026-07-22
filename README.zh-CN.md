@@ -6,6 +6,8 @@
 
 CLI 当前锁定的模型 ID 为 `deepseek-v4-flash`（DeepSeek V4 Flash）。
 
+Windows 目前要求 `PATH` 中存在 PowerShell 7+（`pwsh.exe`），不支持 Windows PowerShell 5.1。`deepseek login` 会在要求输入 API key 前检查该依赖；不满足时会报错并给出安装提示。
+
 ## 安装
 
 Skill 与 CLI 需要分别安装。
@@ -67,8 +69,8 @@ CLI 无状态，也没有咨询/执行模式。Prompt 必须完全自包含。Ag
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
 npx skills add . --list
 sh -n scripts/install.sh
 ```
