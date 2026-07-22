@@ -1514,7 +1514,11 @@ mod tests {
         assert_eq!(result["status"], "success");
         let stdout = result["stdout"].as_str().unwrap();
         assert!(stdout.starts_with("中文🙂|1|utf-8|1|1|0|"));
-        assert!(stdout.contains(d.path().to_string_lossy().as_ref()));
+        let reported_cwd = stdout.rsplit_once('|').unwrap().1;
+        assert_eq!(
+            std::fs::canonicalize(reported_cwd).unwrap(),
+            std::fs::canonicalize(d.path()).unwrap()
+        );
 
         #[cfg(windows)]
         let invalid =
