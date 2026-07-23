@@ -407,7 +407,7 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "deepseek-cli"
-version = "2026.716.0"
+version = "2026.723.0"
 dependencies = [
  "anyhow",
  "atomic-write-file",
