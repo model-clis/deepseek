@@ -3,7 +3,6 @@ mod api;
 mod cli;
 mod config;
 mod diagnostics;
-mod search;
 mod tools;
 
 use anyhow::{Context, Result, bail};

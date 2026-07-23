@@ -2,6 +2,8 @@ use atomic_write_file::AtomicWriteFile;
 use command_group::AsyncCommandGroup;
 use serde::Deserialize;
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::VecDeque,
     io::{BufRead, Write},
@@ -16,10 +18,9 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-use crate::search::{SearchArgs, SearchSession};
-
 const MAX_OUTPUT: usize = 50 * 1024;
 const MAX_LINE: usize = 128 * 1024;
+const SEARCH_COMMANDS: [&str; 3] = ["rg", "fd", "fdfind"];
 
 #[cfg(windows)]
 const POWERSHELL_WRAPPER: &str = concat!(
@@ -46,6 +47,62 @@ const POWERSHELL_EXIT_EPILOGUE: &str = concat!(
 pub struct ShellInfo {
     program: PathBuf,
     pub description: String,
+    available_search_commands: Vec<&'static str>,
+}
+
+#[cfg(unix)]
+fn detect_search_commands() -> Vec<&'static str> {
+    let paths: Vec<_> = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default();
+    detect_search_commands_in(&paths)
+}
+
+#[cfg(unix)]
+fn detect_search_commands_in(paths: &[PathBuf]) -> Vec<&'static str> {
+    SEARCH_COMMANDS
+        .into_iter()
+        .filter(|command| {
+            paths.iter().any(|path| {
+                std::fs::metadata(path.join(command)).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            })
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn detected_windows_search_commands(output: &str) -> Vec<&'static str> {
+    SEARCH_COMMANDS
+        .into_iter()
+        .filter(|command| {
+            output.lines().any(|line| {
+                Path::new(line.trim())
+                    .file_stem()
+                    .is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case(command))
+            })
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn detect_search_commands(program: &Path) -> Vec<&'static str> {
+    let output = std::process::Command::new(program)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Command -Name rg,fd,fdfind -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }",
+        ])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .map(|output| detected_windows_search_commands(&output))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 impl ShellInfo {
@@ -91,6 +148,7 @@ impl ShellInfo {
             ));
         }
         Ok(Self {
+            available_search_commands: detect_search_commands(&program),
             program,
             description: format!("PowerShell 7 (pwsh); {version}"),
         })
@@ -120,7 +178,24 @@ impl ShellInfo {
         Ok(Self {
             program,
             description: format!("/bin/sh; {version}"),
+            available_search_commands: detect_search_commands(),
         })
+    }
+
+    pub fn command_hint(&self) -> String {
+        if self.available_search_commands.is_empty() {
+            String::new()
+        } else {
+            let commands = self
+                .available_search_commands
+                .iter()
+                .map(|command| format!("`{command}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                " Available search commands on PATH: {commands}. Use them through shell when appropriate."
+            )
+        }
     }
 }
 
@@ -140,11 +215,6 @@ pub fn definitions(shell: &ShellInfo) -> Vec<Value> {
             "read",
             "Read a regular UTF-8 file with 1-based line offsets (up to 2000 lines and 128 KiB per call). UTF-8 BOM is hidden and CRLF/CR are returned as LF. Continue from next_offset when truncated is true",
             json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","minLength":1},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"]}),
-        ),
-        def(
-            "search",
-            "Find files or file contents in the startup workspace, respecting ignore rules. File queries tolerate typos; content queries use plain (default), regex, or fuzzy mode. Narrow the query if truncated",
-            json!({"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["files","content"]},"query":{"type":"string","minLength":1,"maxLength":4096},"mode":{"type":"string","enum":["plain","regex","fuzzy"],"description":"Content mode; defaults to plain and is ignored for file search"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":20}},"required":["kind","query"]}),
         ),
         def(
             "write",
@@ -271,19 +341,9 @@ fn parse<T: for<'a> Deserialize<'a>>(args: &str) -> Result<T, String> {
     serde_json::from_str(args).map_err(|e| format!("Invalid arguments: {e}"))
 }
 
-pub async fn execute(
-    name: &str,
-    args: &str,
-    cwd: &Path,
-    shell_info: &ShellInfo,
-    search: &SearchSession,
-) -> String {
+pub async fn execute(name: &str, args: &str, cwd: &Path, shell_info: &ShellInfo) -> String {
     match name {
         "read" => parse(args).map_or_else(|e| invalid_arguments("read", e), |a| read(a, cwd)),
-        "search" => match parse::<SearchArgs>(args) {
-            Ok(a) => search.execute(a).await,
-            Err(e) => crate::search::invalid_arguments(e),
-        },
         "write" => parse(args).map_or_else(|e| invalid_arguments("write", e), |a| write(a, cwd)),
         "edit" => parse(args).map_or_else(|e| invalid_arguments("edit", e), |a| edit(a, cwd)),
         "shell" => match parse(args) {
@@ -1020,17 +1080,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     async fn run(name: &str, args: &str, dir: &Path) -> Value {
-        serde_json::from_str(
-            &execute(
-                name,
-                args,
-                dir,
-                &ShellInfo::detect().unwrap(),
-                &SearchSession::unavailable(),
-            )
-            .await,
-        )
-        .unwrap()
+        serde_json::from_str(&execute(name, args, dir, &ShellInfo::detect().unwrap()).await)
+            .unwrap()
     }
 
     fn keys(value: &Value) -> BTreeSet<&str> {
@@ -1077,7 +1128,7 @@ mod tests {
     fn definitions_are_small_strict_and_describe_text_adaptation() {
         let shell = ShellInfo::detect().unwrap();
         let definitions = definitions(&shell);
-        assert_eq!(definitions.len(), 5);
+        assert_eq!(definitions.len(), 4);
         for definition in &definitions {
             assert_eq!(
                 definition["function"]["parameters"]["additionalProperties"],
@@ -1091,18 +1142,64 @@ mod tests {
                 .contains("BOM")
         );
         assert!(
-            definitions[3]["function"]["description"]
+            definitions[2]["function"]["description"]
                 .as_str()
                 .unwrap()
                 .contains("CRLF")
         );
-        let shell = definitions[4]["function"]["description"].as_str().unwrap();
+        let shell = definitions[3]["function"]["description"].as_str().unwrap();
         assert!(shell.contains("600 seconds"));
         assert!(!shell.contains("background"));
         assert_eq!(
-            definitions[4]["function"]["parameters"]["properties"]["timeout_seconds"]["default"],
+            definitions[3]["function"]["parameters"]["properties"]["timeout_seconds"]["default"],
             600
         );
+    }
+
+    #[test]
+    fn command_hint_is_stable_and_omitted_when_empty() {
+        let mut shell = ShellInfo {
+            program: PathBuf::new(),
+            description: String::new(),
+            available_search_commands: Vec::new(),
+        };
+        assert!(shell.command_hint().is_empty());
+        shell.available_search_commands = vec!["rg", "fdfind"];
+        assert_eq!(
+            shell.command_hint(),
+            " Available search commands on PATH: `rg`, `fdfind`. Use them through shell when appropriate."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_only_executable_search_commands_in_stable_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let rg = dir.path().join("rg");
+        let fd = dir.path().join("fd");
+        let fdfind = dir.path().join("fdfind");
+        std::fs::write(&rg, []).unwrap();
+        std::fs::write(&fd, []).unwrap();
+        std::fs::write(&fdfind, []).unwrap();
+        std::fs::set_permissions(&rg, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&fd, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&fdfind, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            detect_search_commands_in(&[dir.path().join("missing"), dir.path().into()]),
+            ["rg", "fdfind"]
+        );
+        assert!(detect_search_commands_in(&[]).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_windows_search_commands_in_stable_order() {
+        assert_eq!(
+            detected_windows_search_commands("FDFIND.CMD\r\nrg.exe\r\nrg.exe\r\nother.exe\r\n"),
+            ["rg", "fdfind"]
+        );
+        assert!(detected_windows_search_commands("").is_empty());
     }
 
     #[tokio::test]

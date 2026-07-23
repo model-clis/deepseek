@@ -48,7 +48,7 @@ fn system(cwd: &std::path::Path, shell: &tools::ShellInfo) -> String {
     let now = chrono::Local::now();
     let timezone = iana_time_zone::get_timezone().unwrap_or_else(|_| "unknown".into());
     format!(
-        "You are a general-purpose agent. Follow the user's scope, side-effect, and output-format constraints exactly; plan before acting and use only the tool calls needed. Treat tool results as authoritative: check ok and any status, truncation, or continuation fields before claiming success or completeness. Environment: OS={} {}; arch={}; shell={}. The startup cwd is {}; relative paths resolve from it and absolute paths remain absolute. The local startup datetime is {} ({}). CLI version: {}. Tools: read reads files; search finds files or content in the startup workspace; write creates or replaces files; edit performs a unique replacement; shell runs commands.",
+        "You are a general-purpose agent. Follow the user's scope, side-effect, and output-format constraints exactly; plan before acting and use only the tool calls needed. Treat tool results as authoritative: check ok and any status, truncation, or continuation fields before claiming success or completeness. Environment: OS={} {}; arch={}; shell={}. The startup cwd is {}; relative paths resolve from it and absolute paths remain absolute. The local startup datetime is {} ({}). CLI version: {}. Tools: read reads files; write creates or replaces files; edit performs a unique replacement; shell runs commands.{}",
         os.os_type(),
         os.version(),
         std::env::consts::ARCH,
@@ -56,7 +56,8 @@ fn system(cwd: &std::path::Path, shell: &tools::ShellInfo) -> String {
         cwd.display(),
         now.to_rfc3339(),
         timezone,
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        shell.command_hint()
     )
 }
 
@@ -95,7 +96,6 @@ fn is_context(e: &anyhow::Error) -> bool {
 pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -> Result<Outcome> {
     let shell_info = tools::ShellInfo::detect().map_err(anyhow::Error::msg)?;
     let defs = tools::definitions(&shell_info);
-    let search = crate::search::SearchSession::new(&cwd);
     let mut history = vec![
         msg("system", system(&cwd, &shell_info)),
         msg("user", prompt),
@@ -139,7 +139,6 @@ pub async fn run(client: Client, prompt: String, cwd: PathBuf, max_turns: u32) -
                     &call.function.arguments,
                     &cwd,
                     &shell_info,
-                    &search,
                 )
                 .await;
                 crate::diagnostics::log(format_args!("Tool finished: {}", call.function.name));
@@ -403,12 +402,12 @@ mod tests {
         assert_eq!(body["reasoning_effort"], "max");
         assert_eq!(body["max_tokens"], 131_072);
         assert_eq!(body["tool_choice"], "auto");
-        assert_eq!(body["tools"].as_array().unwrap().len(), 5);
+        assert_eq!(body["tools"].as_array().unwrap().len(), 4);
         assert!(body.get("temperature").is_none());
         assert!(body.get("top_p").is_none());
         let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(system.contains("Treat tool results as authoritative"));
-        assert!(!system.contains("Use search, not shell"));
+        assert!(!system.contains("search finds files"));
     }
 
     #[tokio::test]

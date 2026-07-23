@@ -16,7 +16,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 command-group = { version = "=5.0.1", features = ["with-tokio"] }
 dirs = "6"
-fff-search = { git = "https://github.com/dmtrKovalenko/fff", rev = "44a5b259570730a4236ecbf06673d43ef7b2263e", version = "=0.9.6", default-features = false, features = ["ripgrep"] }
 httpdate = "1"
 iana-time-zone = "0.1"
 os_info = "3"
