@@ -1,6 +1,6 @@
 ---
 name: delegating-to-deepseek
-description: "Delegate high-effort, mechanical, or context-heavy work to DeepSeek: broad or multi-step code search, evidence gathering across files, repetitive inspection, output-heavy investigation, test repair, well-scoped implementation, and independent parallel subtasks. Use when delegation would materially reduce your work, or whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work."
+description: "Use DeepSeek for bounded, objective worker tasks when the work requires multi-step or cross-file search, repetitive inspection, large-output evidence collection, test-failure reproduction or triage, explicit-criteria verification, or implementation whose behavior, file scope, and acceptance criteria are already decided. Also use whenever the user mentions DeepSeek, a second model, subagents, delegation, or parallel work. Do not delegate recommendations, architecture or product decisions, risk judgments, approvals, or final review unless the user explicitly asks for DeepSeek's opinion or multi-model brainstorming."
 compatibility: "Requires the deepseek CLI, network access to the DeepSeek API, and an API key configured by the user with deepseek login. The caller's shell tool must support invoking the CLI."
 ---
 
@@ -16,7 +16,7 @@ DeepSeek starts with local file and shell tools and does not automatically inher
 
 ## Delegation threshold
 
-Delegate the dirty work: broad searches, repeated inspections, large-output commands, evidence collection, independent verification, test-failure triage, and implementation with clear file boundaries and acceptance criteria. A good delegated task has a concrete deliverable and saves you more effort than it costs to explain and verify.
+Delegate bounded, objective worker tasks: multi-step or cross-file searches, repeated inspections, large-output evidence collection, test-failure reproduction or triage, verification against explicit caller-provided criteria, and implementation whose intended behavior, file scope, and acceptance criteria are already decided. A good delegated task has a concrete deliverable that can be checked without asking DeepSeek to choose the desired behavior or evaluation standard.
 
 Work directly when the task is already small and obvious, such as reading one known file, finding an exact symbol, making a tiny local edit, running one focused command, answering a brief follow-up, or reporting status. Use DeepSeek as needed; you do not need to invoke it on every subsequent turn.
 
@@ -36,7 +36,7 @@ Split large work into bounded, stateless calls. Read-only calls are usually safe
 
 Use DeepSeek primarily as a worker and evidence gatherer, not as the authority for architecture, safety, correctness, or final review. Do not delegate a task whose main output is a recommendation, design decision, risk judgment, or approval unless the user explicitly asks for DeepSeek's opinion or multi-model brainstorming.
 
-DeepSeek may gather evidence, check an implementation against explicit criteria, or draft alternatives for a decision. You must independently evaluate that work and make the final judgment.
+DeepSeek may gather evidence, check an implementation against explicit caller-provided criteria, or compare caller-provided alternatives along caller-provided dimensions. It must not recommend, rank, approve, or select an alternative unless the user explicitly requested DeepSeek's opinion or multi-model brainstorming. You must independently evaluate the work and make the final judgment.
 
 ## Build the prompt
 
@@ -47,6 +47,7 @@ Give each call one coherent objective and include everything needed to complete 
 - Explain the repository, subsystem, user-visible problem, and why the task matters.
 - Separate known facts from hypotheses. Include errors, relevant observations, and decisions already made.
 - Describe current behavior and desired behavior precisely. Use concrete examples when semantics could be interpreted more than one way.
+- Do not delegate test repair or implementation until the intended behavior is established. If deciding whether production code, tests, or expectations should change is part of the task, keep that decision with the caller and delegate only the resulting evidence gathering or implementation.
 - Name important symbols, APIs, commands, conventions, and likely starting files. Do not make the model rediscover information you already have.
 - For execution, define exact allowed paths, forbidden areas, expected edits, non-goals, and behavior that must remain unchanged.
 - For read-only work, explicitly prohibit edits, mutating commands, external communication, and changes to systems or services.
@@ -104,12 +105,12 @@ Use this general structure, omitting sections that add no information:
 </completion_criteria>
 
 <final_response>
-Return a concise report with these headings:
-[Result or conclusion]
-[Changes or key findings]
-[Verification or evidence]
-[Incomplete work, risks, or unknowns]
-Do not add a recommendations section unless the task explicitly asks for one.
+Return a concise report with headings appropriate to the task:
+[Outcome, findings, or criteria checked]
+[Changes made or evidence found]
+[Verification performed and observed results]
+[Incomplete work, blockers, or unknowns]
+Report observations and criterion results. Do not recommend, rank, approve, select an alternative, or make architecture, product, risk, or final-review judgments unless the user explicitly requested DeepSeek's opinion or multi-model brainstorming.
 </final_response>
 ```
 
